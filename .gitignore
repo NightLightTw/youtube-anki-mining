@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 下載與產出的媒體（可由 yt-dlp / mine.py 重新產生）
+media/
+
+# genanki 產出（可由 make_apkg.py 重新產生）
+YT_Mining_EN.apkg
+
+# API 金鑰（切勿進版控）
+.env
+
+# macOS
+.DS_Store
