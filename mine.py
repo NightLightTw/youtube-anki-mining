@@ -164,14 +164,39 @@ def fetch_definition(word):
         return ""
 
 
-def fetch_chinese(text):
-    """Google 翻譯（非官方端點）→ 原生繁體中文 zh-TW。失敗回空字串。"""
+def _google_translate(text):
     url = ("https://translate.googleapis.com/translate_a/single"
            "?client=gtx&sl=en&tl=zh-TW&dt=t&q=" + urllib.parse.quote(text))
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    data = json.load(urllib.request.urlopen(req, timeout=10))
+    return "".join(seg[0] for seg in data[0] if seg[0])
+
+
+def fetch_chinese(word, definition_hint=""):
+    """Google 翻譯（非官方端點）→ 原生繁體中文 zh-TW。
+
+    單獨翻譯裸字很容易猜錯詞義（例：crust 裸翻會得到「地殼」而非「餅皮」），
+    因為 Google 手上除了那個字什麼語境都沒有。若有 MW 英文定義可用，改翻譯
+    「word: definition」讓它有語境判斷，再切出冒號前的譯文。
+    翻譯偶爾會整段放棄翻譯（結果仍殘留英文字母），這種情況就退回裸字翻譯。
+    """
+    if definition_hint:
+        plain_def = re.sub(r"<[^>]+>", "", definition_hint).split("<br>")[0]
+        plain_def = re.sub(r"^\s*(noun|verb|adjective|adverb)\s+", "", plain_def,
+                            flags=re.I).strip()
+        if plain_def:
+            try:
+                combined = _google_translate(f"{word}: {plain_def}")
+                for sep in ("：", ":"):
+                    if sep in combined:
+                        candidate = combined.split(sep, 1)[0].strip()
+                        if candidate and not re.search(r"[A-Za-z]", candidate):
+                            return html.escape(candidate)
+                        break  # 翻譯失敗（殘留英文）→ 跳出，改走下面的裸字翻譯
+            except Exception:
+                pass  # 帶語境翻譯呼叫本身失敗（逾時等）→ 一併退回裸字翻譯
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        data = json.load(urllib.request.urlopen(req, timeout=10))
-        return html.escape("".join(seg[0] for seg in data[0] if seg[0]))
+        return html.escape(_google_translate(word))
     except Exception as ex:
         print(f"  (中文翻譯失敗：{ex})")
         return ""
@@ -242,7 +267,7 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
 
     definition = fetch_definition(word)
     synonyms = fetch_synonyms(word)
-    chinese = fetch_chinese(word)
+    chinese = fetch_chinese(word, definition_hint=definition)
     url = f"https://youtu.be/{urllib.parse.quote(video_id)}?t={int(start)}"
 
     note = {

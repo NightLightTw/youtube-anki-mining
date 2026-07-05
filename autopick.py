@@ -32,19 +32,33 @@ COMMON_NAMES = {
 
 _lemma_cache = {}
 
+# simplemma 對少數字有錯誤的還原結果（已知瑕疵），在此覆寫成正確原形。
+# 例：lemmatize("slang") 會誤回傳 "sling"，導致整張卡查到完全不同的字。
+LEMMA_OVERRIDES = {
+    "slang": "slang",
+}
+
 
 def lemma(w):
     w = w.lower()
+    if w in LEMMA_OVERRIDES:
+        return LEMMA_OVERRIDES[w]
     if w not in _lemma_cache:
         _lemma_cache[w] = simplemma.lemmatize(w, lang="en")
     return _lemma_cache[w]
+
+
+# 只用 [A-Za-z] 會把含重音字母的外來詞從中間切斷，例如 "appétit" 的 é 不在範圍內，
+# 導致被切成 "app"+"tit" 兩個假單字（"tit" 恰好是個真實英文字，就會被誤選成生字候選）。
+# 補上拉丁重音字母範圍（涵蓋 café/naïve/jalapeño 這類常見外來詞），整詞保留不被切斷。
+WORD_CHARS = r"A-Za-zÀ-ÖØ-öø-ÿ"
 
 
 def _clean_first_field(val):
     val = re.sub(r"\[sound:[^\]]*\]", " ", val)
     val = re.sub(r"<[^>]+>", " ", val)
     val = re.sub(r"\([^)]*\)", " ", val)        # 去 (n.) (v.) 等詞性標記
-    val = re.sub(r"[^A-Za-z\s'-]", " ", val)
+    val = re.sub(rf"[^{WORD_CHARS}\s'-]", " ", val)
     return val.lower().split()
 
 
@@ -74,7 +88,7 @@ def proper_nouns(sentences):
     之後連它出現在句首時也一併排除。"""
     pn = set()
     for s in sentences:
-        toks = re.findall(r"[A-Za-z][A-Za-z'-]+", s["text"])
+        toks = re.findall(rf"[{WORD_CHARS}][{WORD_CHARS}'-]+", s["text"])
         for idx, w in enumerate(toks):
             if idx > 0 and w[0].isupper():
                 pn.add(lemma(w))
@@ -83,7 +97,7 @@ def proper_nouns(sentences):
 
 def sentence_unknowns(text, known, proper, min_zipf, max_zipf):
     """回傳句中的生字 [(surface, lemma, zipf)]，已去已知字/功能詞/專有名詞。"""
-    tokens = re.findall(r"[A-Za-z][A-Za-z'-]+", text)
+    tokens = re.findall(rf"[{WORD_CHARS}][{WORD_CHARS}'-]+", text)
     out, seen = [], set()
     for idx, w in enumerate(tokens):
         if idx > 0 and w[0].isupper():     # 句中大寫 → 專有名詞
