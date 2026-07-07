@@ -124,6 +124,50 @@ def extract_audio(video, start, end, out):
          "-t", f"{dur+0.3:.3f}", "-vn", "-acodec", "libmp3lame", "-q:a", "4", out])
 
 
+# 跨影片來源的收音品質/後製差異很大（實測範圍可達 -13~-28 dB），統一正規化到
+# 這個平均音量基準，避免複習時聲音忽大忽小。
+TARGET_VOLUME_DB = -20.0
+MAX_GAIN_DB = 15.0      # 增益上限：避免對過度安靜的片段放大到雜訊也一起被放大
+CLIP_HEADROOM_DB = -1.0  # 削波保護：套用增益後峰值留一點餘裕，不頂到 0dB 破音
+
+
+def _measure_volume(path):
+    """用 ffmpeg volumedetect 量測平均/峰值音量(dB)；分析不出來則回傳 (None, None)。"""
+    result = subprocess.run(
+        ["ffmpeg", "-i", path, "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    mean = re.search(r"mean_volume:\s*([\-\d.]+) dB", result.stderr)
+    peak = re.search(r"max_volume:\s*([\-\d.]+) dB", result.stderr)
+    if not mean or not peak:
+        print(f"  (音量分析失敗，跳過正規化：{path}，"
+              f"ffmpeg exit={result.returncode})")
+        return None, None
+    return float(mean.group(1)), float(peak.group(1))
+
+
+def normalize_audio(path, target_db=TARGET_VOLUME_DB):
+    """把句子音檔的平均音量正規化到統一基準。
+
+    用「量測平均音量→計算精確增益」而非 ffmpeg 的 loudnorm，因為句子音檔通常只有
+    幾秒，loudnorm 的 EBU R128 積分響度演算法對短音檔誤差較大（實測誤差可達 3dB、
+    且同樣長度的片段結果還會不一致）；簡單的增益調整對短音檔反而更精準可預測。
+    """
+    mean, peak = _measure_volume(path)
+    if mean is None:
+        return  # 分析失敗（例如極端安靜/近乎無聲的片段），保留原始音檔，不強行處理
+    gain = target_db - mean
+    gain = max(-MAX_GAIN_DB, min(MAX_GAIN_DB, gain))
+    if peak + gain > CLIP_HEADROOM_DB:
+        gain = CLIP_HEADROOM_DB - peak
+    if abs(gain) < 0.5:
+        return  # 差異太小，不值得重新編碼一次
+    tmp = f"{path}.norm.mp3"
+    run(["ffmpeg", "-y", "-i", path, "-af", f"volume={gain:.2f}dB",
+         "-acodec", "libmp3lame", "-q:a", "4", tmp])
+    os.replace(tmp, path)
+
+
 def extract_image(video, t, out):
     run(["ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", video,
          "-frames:v", "1", "-vf", "scale=480:-1", "-q:v", "4", out])
@@ -262,6 +306,7 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
         return None
 
     extract_audio(video_file, sent["start"], sent["end"], f"{MEDIA_DIR}/{audio_fn}")
+    normalize_audio(f"{MEDIA_DIR}/{audio_fn}")
     store(f"{MEDIA_DIR}/{audio_fn}", audio_fn)
     if save_image:
         extract_image(video_file, mid, f"{MEDIA_DIR}/{img_fn}")
