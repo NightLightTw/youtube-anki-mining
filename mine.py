@@ -244,7 +244,8 @@ def highlight(sentence, word):
                   flags=re.IGNORECASE)
 
 
-def add_card(video_id, video_file, sent, word, title, collocation="", highlight_word=None):
+def add_card(video_id, video_file, sent, word, title, collocation="", highlight_word=None,
+             save_image=True):
     start = sent["start"]
     mid = (sent["start"] + sent["end"]) / 2
     # slug 全小寫（避免 Anki 媒體層大小寫正規化讓 iPhone 斷圖斷音）；
@@ -261,9 +262,10 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
         return None
 
     extract_audio(video_file, sent["start"], sent["end"], f"{MEDIA_DIR}/{audio_fn}")
-    extract_image(video_file, mid, f"{MEDIA_DIR}/{img_fn}")
     store(f"{MEDIA_DIR}/{audio_fn}", audio_fn)
-    store(f"{MEDIA_DIR}/{img_fn}", img_fn)
+    if save_image:
+        extract_image(video_file, mid, f"{MEDIA_DIR}/{img_fn}")
+        store(f"{MEDIA_DIR}/{img_fn}", img_fn)
 
     definition = fetch_definition(word)
     synonyms = fetch_synonyms(word)
@@ -282,7 +284,7 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
             "Synonyms": synonyms,
             "SentenceAudio": f"[sound:{audio_fn}]",
             "WordAudio": "",
-            "Image": f'<img src="{html.escape(img_fn, quote=True)}">',
+            "Image": f'<img src="{html.escape(img_fn, quote=True)}">' if save_image else "",
             "Source": html.escape(title),
             "URL": f'<a href="{html.escape(url, quote=True)}">{html.escape(url)}</a>',
         },
@@ -299,7 +301,7 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
     print(f"  Definition: {definition or '(空)'}")
     print(f"  Chinese: {chinese or '(無)'}")
     print(f"  Synonyms: {synonyms or '(無)'}")
-    print(f"  Audio: {audio_fn} / Image: {img_fn}")
+    print(f"  Audio: {audio_fn} / Image: {img_fn if save_image else '(未留存)'}")
     print(f"  URL: {url}")
     return note_id
 
@@ -321,6 +323,8 @@ def main():
     ap.add_argument("--min-zipf", type=float, default=2.5)
     ap.add_argument("--max-zipf", type=float, default=4.2)
     ap.add_argument("--dry-run", action="store_true", help="只列出自動挑的字，不建卡")
+    ap.add_argument("--no-image", action="store_true",
+                    help="不擷取/儲存影片截圖（Image 欄位留空）；預設會留存截圖")
     args = ap.parse_args()
 
     # 模式互斥：--list / --auto / 手動(--index+--word) 三者剛好擇一，不可混用
@@ -369,7 +373,8 @@ def main():
         for c in picks:
             try:
                 nid = add_card(args.video_id, video, c["sent"], c["lemma"],
-                               args.title, highlight_word=c["surface"])
+                               args.title, highlight_word=c["surface"],
+                               save_image=not args.no_image)
                 if nid is None:          # 重複被預檢跳過
                     skipped += 1
                 else:
@@ -385,7 +390,8 @@ def main():
     if not (0 <= args.index < len(sents)):
         ap.error(f"--index {args.index} 超出範圍（0~{len(sents)-1}）；可先用 --list 看索引")
     sent = sents[args.index]
-    add_card(args.video_id, video, sent, args.word, args.title, args.collocation)
+    add_card(args.video_id, video, sent, args.word, args.title, args.collocation,
+             save_image=not args.no_image)
 
 
 if __name__ == "__main__":

@@ -46,6 +46,38 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   exit 1
 fi
 
+# 0.5) 確認 PO Token server 有在跑，沒開就自動啟動（YouTube 近期收緊反爬蟲，
+#      沒有這個 yt-dlp 常會被擋下載）。找不到已安裝的 server 目錄就只警告，
+#      不中斷腳本 —— 有些影片就算沒有 PO token 也可能下載成功。
+#      安裝步驟見 README「PO Token Server」章節。
+step "確認 PO Token Server"
+POT_DIR="$HOME/bgutil-ytdlp-pot-provider/server"
+POT_PORT=4416
+POT_LOG="$HOME/bgutil-ytdlp-pot-provider/server.log"
+pot_ready() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$POT_PORT") 2>/dev/null
+}
+if pot_ready; then
+  echo "  PO Token server 已在執行"
+elif [ -d "$POT_DIR/build" ]; then
+  echo "  啟動 PO Token server..."
+  ( cd "$POT_DIR" && nohup node build/main.js > "$POT_LOG" 2>&1 < /dev/null & )
+  READY=0
+  DEADLINE=$((SECONDS + 15))
+  while [ "$SECONDS" -lt "$DEADLINE" ]; do
+    if pot_ready; then READY=1; break; fi
+    sleep 1
+  done
+  if [ "$READY" -eq 1 ]; then
+    echo "✓ PO Token server 已就緒"
+  else
+    echo "⚠️ PO Token server 啟動逾時，YouTube 下載可能會被擋（log: $POT_LOG）" >&2
+  fi
+else
+  echo "⚠️ 找不到 PO Token server ($POT_DIR)。若下一步下載失敗，" >&2
+  echo "   請參考 README「PO Token Server」章節安裝 bgutil-ytdlp-pot-provider。" >&2
+fi
+
 # 1) 從網址抽出 video id（支援 youtu.be/xxx、watch?v=xxx、shorts/xxx，含 ?si= 等參數）
 # --no-playlist：網址若帶 list= 或本身是播放清單，只處理該支影片，避免誤下載整個清單
 step "解析影片網址"

@@ -83,6 +83,31 @@ python3 -m venv .venv
    ```
 沒填 key 也能跑，只是 `Definition` / `Synonyms` 會留空（可改用 Yomitan 補）。
 
+<a id="po-token-server"></a>
+### 5.（YouTube 常擋下載時必裝）PO Token Server
+2026 年中起 YouTube 大幅收緊反爬蟲機制，`yt-dlp` 常遇到兩種錯誤：
+- `Sign in to confirm you're not a bot`
+- `Requested format is not available`（畫質清單只剩 storyboard 縮圖）
+
+解法是幫 yt-dlp 裝一個本機的 **PO Token 提供者**（[bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)），跑一個小型 Node.js 服務幫忙生成驗證 token。`run.sh` 每次執行都會自動偵測並啟動它，你只需要**裝好一次**：
+
+```bash
+# 前置需求：Node.js >= 20、git（macOS 通常已內建 git）
+cd ~
+git clone --single-branch --branch 1.3.1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git
+cd bgutil-ytdlp-pot-provider/server/
+npm ci
+npx tsc
+
+# 裝 yt-dlp 端的 plugin（在本專案的 venv 裡）
+cd /path/to/youtube-anki-mining
+.venv/bin/pip install -U bgutil-ytdlp-pot-provider
+```
+
+裝完之後，`run.sh` 執行時的「確認 PO Token Server」步驟會自動偵測 `~/bgutil-ytdlp-pot-provider/server/build` 是否存在：存在就自動啟動（監聽 `127.0.0.1:4416`）、已在跑就直接沿用；找不到就只印警告、不中斷腳本（部分影片沒有這個也能下載）。
+
+> 這是 yt-dlp 社群方案，不保證長期有效——YouTube 與反爬蟲工具是持續拉鋸的攻防，未來若又失效，到 [yt-dlp GitHub issues](https://github.com/yt-dlp/yt-dlp/issues) 搜尋最新對策即可。
+
 ---
 
 ## 方式 A：自動管線 `mine.py`
@@ -123,6 +148,12 @@ ID=iDG0rwm9GaQ   # 換成你的影片 ID
 4. 同一個字只留最短的一句；**進階字優先**（頻率帶內由難到易），取前 `--max-cards`(預設 20) 個。
 
 調參：`--max-zipf` 調高 → 收更多較基礎的字；調低 → 只收進階字。`Word` 存原形(lemma)、例句裡標色的是原始字形。
+
+加 `--no-image` 可關閉截圖（`Image` 欄位留空、不擷取/不上傳截圖），適合訪談/新聞類畫面沒有輔助記憶價值的影片：
+```bash
+.venv/bin/python mine.py $ID --auto --no-image --title "影片標題"
+```
+`run.sh` 也會原封轉發這個參數：`./run.sh "網址" --no-image`。
 
 > 自動挑字品質不會比手動好——它靠頻率＋已知字庫猜，建完在 Anki 裡掃一遍刪掉不要的即可。
 
@@ -206,4 +237,5 @@ ID=iDG0rwm9GaQ   # 換成你的影片 ID
 | iPhone 上斷圖／斷音 | 媒體檔名大小寫不一致（iOS 區分大小寫）。`mine.py` 已把檔名一律小寫。 |
 | 定義/同義字留空 | `.env` 沒設 Merriam-Webster 金鑰，或當日超過 1000 次額度。 |
 | asbplayer/Yomitan 送卡失敗 | CORS 沒放行該擴充 ID，用 `add_cors.py` 加入後重開 Anki。 |
+| `yt-dlp` 出現 `Sign in to confirm you're not a bot` 或 `Requested format is not available` | YouTube 反爬蟲收緊。裝 [PO Token Server](#po-token-server)（見「安裝與設定」步驟 5），`run.sh` 會自動偵測並啟動它。 |
 | 句子破碎/不完整 | 該影片只有自動字幕，品質有限；可換索引或手動修句。 |
