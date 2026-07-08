@@ -35,7 +35,8 @@ _lemma_cache = {}
 # simplemma 對少數字有錯誤的還原結果（已知瑕疵），在此覆寫成正確原形。
 # 例：lemmatize("slang") 會誤回傳 "sling"，導致整張卡查到完全不同的字。
 LEMMA_OVERRIDES = {
-    "slang": "slang",
+    "slang": "slang",   # 誤還原成 sling
+    "taxes": "tax",     # 誤還原成 taxis（計程車複數），導致整張卡查錯字
 }
 
 

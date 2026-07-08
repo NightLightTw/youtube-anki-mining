@@ -117,14 +117,16 @@ step "取得影片標題"
 TITLE=$("$YTDLP" --no-warnings --no-playlist --skip-download --print "%(title)s" "$URL")
 echo "  標題: $TITLE"
 
-# 4) 下載英文自動字幕（若已存在則 yt-dlp 會直接覆蓋/略過，天然可重跑）
+# 4) 下載英文字幕（--write-subs 人工字幕 + --write-auto-subs 自動字幕並用：
+#    部分影片如 BBC 只有人工上傳字幕、沒有 en 自動字幕，兩旗標並用時 yt-dlp
+#    會優先抓品質較好的人工字幕。若已存在則直接覆蓋，天然可重跑）
 step "下載字幕"
-"$YTDLP" --no-warnings --no-playlist --skip-download --write-auto-subs --sub-lang en \
-  --sub-format srt --convert-subs srt -o "media/%(id)s.%(ext)s" "$URL"
+"$YTDLP" --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs \
+  --sub-lang en --sub-format srt --convert-subs srt -o "media/%(id)s.%(ext)s" "$URL"
 SRT="media/${VIDEO_ID}.en.srt"
 if [ ! -s "$SRT" ]; then
   echo "✗ 找不到英文字幕檔：$SRT" >&2
-  echo "  這支影片可能沒有英文（自動）字幕，無法用本工具製卡。" >&2
+  echo "  這支影片可能沒有英文字幕（人工或自動皆無），無法用本工具製卡。" >&2
   exit 1
 fi
 

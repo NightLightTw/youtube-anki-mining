@@ -168,7 +168,7 @@ cd /path/to/youtube-anki-mining
 ID=iDG0rwm9GaQ   # 換成你的影片 ID
 
 # 1) 下載英文字幕 + 低畫質影片（音檔/截圖來源）
-.venv/bin/yt-dlp --write-auto-subs --sub-lang en --sub-format srt --convert-subs srt \
+.venv/bin/yt-dlp --write-subs --write-auto-subs --sub-lang en --sub-format srt --convert-subs srt \
   --skip-download -o "media/%(id)s.%(ext)s" "https://youtu.be/$ID"
 .venv/bin/yt-dlp -f "best[height<=360]" --merge-output-format mp4 \
   -o "media/%(id)s.%(ext)s" "https://youtu.be/$ID"
