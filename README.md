@@ -10,7 +10,7 @@
 
 - **一鍵全自動**：`./run.sh "YouTube網址"` 跑完下載字幕/影片 → 挑生字 → 製卡 → 同步 AnkiWeb
 - **i+1 語境挑字**：撈你現有 Anki 牌組排除已學單字 → 頻率過濾 → 只留「整句剛好一個生字」的乾淨例句 → 進階字優先，預設每支影片 20 張
-- **卡片內容齊全**：例句標色、Merriam-Webster 英英定義／同反義字、Google 繁中釋義（設有 MW 金鑰時會帶英文定義當語境提示，比裸字直翻準；沒金鑰則退回裸字翻譯）、ffmpeg 切出的句子真人發音 mp3、影片截圖（可用 `--no-image` 關閉）、可回看的時間戳連結
+- **卡片內容齊全**：例句標色、Merriam-Webster 英英定義／同反義字、Google 繁中釋義（設有 MW 金鑰時會帶英文定義當語境提示，比裸字直翻準；沒金鑰則退回裸字翻譯）、ffmpeg 切出的句子真人發音 mp3、影片截圖（預設不留存，需要時加 `--with-image` 開啟）、可回看的時間戳連結
 - **穩健的工程細節**：跨平台媒體檔名一致性、自動去重、YouTube 反爬蟲（PO Token）自動偵測與啟動、AnkiConnect 錯誤友善提示
 - **手動模式**：想自己挑句子/單字也支援 `--index` + `--word` 精準控制
 
@@ -141,7 +141,7 @@ cd /path/to/youtube-anki-mining
 ```bash
 ./run.sh "https://youtu.be/xxxxxxxxxxx"
 ./run.sh "https://youtu.be/xxxxxxxxxxx" --max-cards 15   # 額外參數原封傳給 mine.py --auto
-./run.sh "https://youtu.be/xxxxxxxxxxx" --no-image       # 關閉截圖（訪談/新聞類畫面無輔助記憶價值時適用）
+./run.sh "https://youtu.be/xxxxxxxxxxx" --with-image      # 開啟截圖（預設不留存，需要視覺輔助時才加這個旗標）
 ```
 依序執行：檢查環境 → 確認/啟動 PO Token Server → 解析網址 → 確認 Anki/AnkiConnect → 下載字幕與影片 → 全自動製卡 → 同步 AnkiWeb。任一步失敗會清楚指出中斷位置，已完成的下載/卡片不會遺失，修正後可直接重跑同一指令。
 

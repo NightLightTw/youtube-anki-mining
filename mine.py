@@ -233,14 +233,17 @@ def fetch_chinese(word, definition_hint=""):
                 combined = _google_translate(f"{word}: {plain_def}")
                 for sep in ("：", ":"):
                     if sep in combined:
-                        candidate = combined.split(sep, 1)[0].strip()
+                        # 翻譯服務偶爾會把結果包在 HTML 標籤裡（實測遇過整段被
+                        # <div>...</div> 包住），先清掉避免殘留標籤污染欄位。
+                        candidate = re.sub(r"<[^>]+>", "", combined.split(sep, 1)[0]).strip()
                         if candidate and not re.search(r"[A-Za-z]", candidate):
                             return html.escape(candidate)
                         break  # 翻譯失敗（殘留英文）→ 跳出，改走下面的裸字翻譯
             except Exception:
                 pass  # 帶語境翻譯呼叫本身失敗（逾時等）→ 一併退回裸字翻譯
     try:
-        return html.escape(_google_translate(word))
+        bare = re.sub(r"<[^>]+>", "", _google_translate(word)).strip()
+        return html.escape(bare)
     except Exception as ex:
         print(f"  (中文翻譯失敗：{ex})")
         return ""
@@ -289,7 +292,7 @@ def highlight(sentence, word):
 
 
 def add_card(video_id, video_file, sent, word, title, collocation="", highlight_word=None,
-             save_image=True):
+             save_image=False):
     start = sent["start"]
     mid = (sent["start"] + sent["end"]) / 2
     # slug 全小寫（避免 Anki 媒體層大小寫正規化讓 iPhone 斷圖斷音）；
@@ -368,8 +371,8 @@ def main():
     ap.add_argument("--min-zipf", type=float, default=2.5)
     ap.add_argument("--max-zipf", type=float, default=4.2)
     ap.add_argument("--dry-run", action="store_true", help="只列出自動挑的字，不建卡")
-    ap.add_argument("--no-image", action="store_true",
-                    help="不擷取/儲存影片截圖（Image 欄位留空）；預設會留存截圖")
+    ap.add_argument("--with-image", action="store_true",
+                    help="擷取/儲存影片截圖；預設不留存（Image 欄位留空），需要才加這個旗標")
     args = ap.parse_args()
 
     # 模式互斥：--list / --auto / 手動(--index+--word) 三者剛好擇一，不可混用
@@ -419,7 +422,7 @@ def main():
             try:
                 nid = add_card(args.video_id, video, c["sent"], c["lemma"],
                                args.title, highlight_word=c["surface"],
-                               save_image=not args.no_image)
+                               save_image=args.with_image)
                 if nid is None:          # 重複被預檢跳過
                     skipped += 1
                 else:
@@ -436,7 +439,7 @@ def main():
         ap.error(f"--index {args.index} 超出範圍（0~{len(sents)-1}）；可先用 --list 看索引")
     sent = sents[args.index]
     add_card(args.video_id, video, sent, args.word, args.title, args.collocation,
-             save_image=not args.no_image)
+             save_image=args.with_image)
 
 
 if __name__ == "__main__":

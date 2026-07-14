@@ -55,12 +55,17 @@ def lemma(w):
 # 補上拉丁重音字母範圍（涵蓋 café/naïve/jalapeño 這類常見外來詞），整詞保留不被切斷。
 WORD_CHARS = r"A-Za-zÀ-ÖØ-öø-ÿ"
 
+# YouTube 字幕的縮寫引號常是彎引號(U+2019 ’)而非直引號(')，只認直引號會把
+# "didn't" 這類字從彎引號處切斷成殘缺片段 "didn"（長度>=3、剛好不是已知字，
+# 就會被誤選成候選字）。兩種引號都要能組成完整詞。
+APOSTROPHES = "'’"
+
 
 def _clean_first_field(val):
     val = re.sub(r"\[sound:[^\]]*\]", " ", val)
     val = re.sub(r"<[^>]+>", " ", val)
     val = re.sub(r"\([^)]*\)", " ", val)        # 去 (n.) (v.) 等詞性標記
-    val = re.sub(rf"[^{WORD_CHARS}\s'-]", " ", val)
+    val = re.sub(rf"[^{WORD_CHARS}\s{APOSTROPHES}-]", " ", val)
     return val.lower().split()
 
 
@@ -90,7 +95,7 @@ def proper_nouns(sentences):
     之後連它出現在句首時也一併排除。"""
     pn = set()
     for s in sentences:
-        toks = re.findall(rf"[{WORD_CHARS}][{WORD_CHARS}'-]+", s["text"])
+        toks = re.findall(rf"[{WORD_CHARS}][{WORD_CHARS}{APOSTROPHES}-]+", s["text"])
         for idx, w in enumerate(toks):
             if idx > 0 and w[0].isupper():
                 pn.add(lemma(w))
@@ -99,12 +104,12 @@ def proper_nouns(sentences):
 
 def sentence_unknowns(text, known, proper, min_zipf, max_zipf):
     """回傳句中的生字 [(surface, lemma, zipf)]，已去已知字/功能詞/專有名詞。"""
-    tokens = re.findall(rf"[{WORD_CHARS}][{WORD_CHARS}'-]+", text)
+    tokens = re.findall(rf"[{WORD_CHARS}][{WORD_CHARS}{APOSTROPHES}-]+", text)
     out, seen = [], set()
     for idx, w in enumerate(tokens):
         if idx > 0 and w[0].isupper():     # 句中大寫 → 專有名詞
             continue
-        if "'" in w:                        # 縮寫 (here's, we'll) → 跳過
+        if any(c in w for c in APOSTROPHES):  # 縮寫 (here's, we'll) → 跳過
             continue
         lm = lemma(w)
         # 專有名詞：句中大寫預掃，或「大寫且在常見人名表」（限大寫，免誤排 mark/mike 等小寫常用字）
