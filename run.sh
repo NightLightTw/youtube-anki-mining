@@ -149,5 +149,18 @@ fi
 step "同步到 AnkiWeb"
 "$PY" -c "from anki import invoke; invoke('sync'); print('✓ 已同步')"
 
+# 8) 同步卡片到 monkeytype 打字練習（選配；失敗只警告，不影響製卡結果。
+#    monkeytype 專案不存在時靜默跳過，兩個專案不互相綁死）
+step "同步到 monkeytype"
+if [ -f "sync_monkeytype.py" ] && [ -d "../monkeytype" ]; then
+  if "$PY" sync_monkeytype.py; then
+    echo "✓ 打字練習內容已更新（重新整理 monkeytype 頁面即生效）"
+  else
+    echo "⚠️ monkeytype 同步失敗（卡片已做完不受影響），可稍後手動執行：$PY sync_monkeytype.py" >&2
+  fi
+else
+  echo "  （略過：找不到 ../monkeytype 專案）"
+fi
+
 echo ""
 echo "✓ 完成：$TITLE"
