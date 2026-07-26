@@ -130,6 +130,19 @@ if [ ! -s "$SRT" ]; then
   exit 1
 fi
 
+# 4.5) 另外抓一份 json3 自動字幕：它每個字都帶時間戳(tOffsetMs)，是 ASR 的實際
+#      對齊結果。SRT 只有整段時間、句子邊界得線性內插猜（實測誤差可達 2.6 秒），
+#      有 json3 時 mine.py 會優先用它校正時間軸，切出來的音檔準得多。
+#      只有自動字幕有這個欄位；純人工字幕的影片抓不到是正常的，不影響製卡。
+step "下載逐字時間戳 (json3，可選)"
+if "$YTDLP" --no-warnings --no-playlist --skip-download --write-auto-subs \
+     --sub-lang en --sub-format json3 -o "media/%(id)s.%(ext)s" "$URL" >/dev/null 2>&1 \
+   && [ -s "media/${VIDEO_ID}.en.json3" ]; then
+  echo "  ✓ 已取得逐字時間戳"
+else
+  echo "  – 這支影片沒有英文自動字幕，改用 SRT 內插時間（正常，不影響製卡）"
+fi
+
 # 5) 下載 360p 影片（做音檔/截圖用；若已存在會被覆蓋，可重跑）
 step "下載影片 (360p)"
 "$YTDLP" --no-warnings --no-playlist -f "best[height<=360]/bestvideo[height<=360]+bestaudio/best" \

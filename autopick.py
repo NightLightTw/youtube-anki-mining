@@ -30,6 +30,24 @@ COMMON_NAMES = {
     "google", "youtube", "anki", "english",
 }
 
+# 口語拼寫變體與填充詞：頻率恰好落在生字帶(2.5~4.2)、卻做不成有意義的卡——
+# 它們是標準詞的非正式拼寫(cuz=because、lemme=let me)或純語氣詞(hmm、wow)，
+# Merriam-Webster 多半查無詞條。高頻的(gonna/yeah zipf>4.2)本來就被頻率上限擋掉，
+# 這裡專門補中頻漏網的那批。注意：不用「MW 查無定義就跳過」兜底，因為 calmly、
+# adipose、ghee 這類正規但 MW Learner's 缺條目的字也會被誤殺，必須是明確的黑名單。
+NON_LEARNING_WORDS = {
+    # 口語縮寫拼寫。刻意不含也有正當詞義的字：til(芝麻)、cos(cosine)、em(印刷單位
+    # em/em dash)——它們頻率落在生字帶，放進黑名單會誤殺正常用法。
+    "cuz", "coz", "sorta", "kinda", "dunno", "lemme", "gimme",
+    "gonna", "wanna", "gotta", "gotcha", "coulda", "woulda", "shoulda", "outta",
+    "ya", "yer", "tryna", "innit", "aint",
+    # 語氣詞 / 填充詞 / 狀聲
+    "yeah", "yep", "yup", "nope", "nah", "uh", "um", "umm", "uhh", "hmm", "hmmm",
+    "mmm", "ooh", "ohh", "aha", "aww", "ugh", "huh", "whoa", "woah", "oops",
+    "yay", "hooray", "haha", "hehe", "heh", "lol", "duh", "meh", "psst", "shh",
+    "wooo", "yikes", "phew", "eh", "hey", "hiya", "yo",
+}
+
 _lemma_cache = {}
 
 # simplemma 對少數字有錯誤的還原結果（已知瑕疵），在此覆寫成正確原形。
@@ -115,6 +133,8 @@ def sentence_unknowns(text, known, proper, min_zipf, max_zipf):
         # 專有名詞：句中大寫預掃，或「大寫且在常見人名表」（限大寫，免誤排 mark/mike 等小寫常用字）
         if lm in proper or (w[0].isupper() and lm in COMMON_NAMES):
             continue
+        if w.lower() in NON_LEARNING_WORDS or lm in NON_LEARNING_WORDS:
+            continue    # 口語拼寫/填充詞：做不成有意義的卡
         if lm in known or lm in seen or len(lm) < 3:
             continue
         z = zipf_frequency(lm, "en")
