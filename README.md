@@ -153,11 +153,14 @@ cd /path/to/youtube-anki-mining
 
 ```bash
 # 先看會挑哪些字（不建卡）
-.venv/bin/python mine.py $ID --auto --dry-run
+.venv/bin/python mine.py --auto --dry-run -- "$ID"
 
 # 確認後批次製卡
-.venv/bin/python mine.py $ID --auto --max-cards 15 --title "影片標題"
+.venv/bin/python mine.py --auto --max-cards 15 --title "影片標題" -- "$ID"
 ```
+
+> `$ID` 放最後、前面加 `--`：YouTube 影片 ID 偶爾以 `-` 開頭（如 `-JJ4OE0rZJo`），
+> 放在其他選項之前會被誤判成未知旗標而報錯；`--` 之後的內容一律當成位置參數。
 
 調參：`--max-zipf` 調高 → 收更多較基礎的字；調低 → 只收進階字。`Word` 存原形(lemma)、例句裡標色的是原始字形。
 
@@ -174,12 +177,12 @@ ID=iDG0rwm9GaQ   # 換成你的影片 ID
   -o "media/%(id)s.%(ext)s" "https://youtu.be/$ID"
 
 # 2) 列出候選句（索引 / 時間 / 字數）
-.venv/bin/python mine.py $ID --list
+.venv/bin/python mine.py --list -- "$ID"
 
 # 3) 挑一句建卡
-.venv/bin/python mine.py $ID --index 28 --word indispensable \
+.venv/bin/python mine.py --index 28 --word indispensable \
   --collocation "be indispensable <b>to</b> sb/sth" \
-  --title "影片標題"
+  --title "影片標題" -- "$ID"
 ```
 
 ### 同步到 iPhone

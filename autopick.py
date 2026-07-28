@@ -56,6 +56,21 @@ LEMMA_OVERRIDES = {
     "slang": "slang",     # 誤還原成 sling
     "taxes": "tax",       # 誤還原成 taxis（計程車複數），導致整張卡查錯字
     "putting": "put",     # 誤還原成 putt（高爾夫推桿），導致 put down(存入) 誤判成高爾夫術語
+    # 英式雙l動名詞系統性瑕疵：simplemma 對「-el/-am 結尾+雙l+ing」的英式拼法常還原
+    # 錯誤，誤還原成「不存在的殘字」（travell/modell/cancell/labell/signall），比查錯字
+    # 更糟——這些殘字會直接變成卡片上的目標字，讓學習者背一個不存在的英文字。
+    # 這裡的覆寫值必須是「最終正確的原形」，不能是中繼字串：LEMMA_OVERRIDES 命中時
+    # lemma() 會直接回傳覆寫值，不會再送進 simplemma 處理一次，所以要填 simplemma
+    # 對「美式單l拼法」還原後的最終結果（travel/model/cancel/label/signal），而不是
+    # 美式拼法本身（simplemma.lemmatize('traveling') 還會再還原成 'travel'）。
+    # counselling 是例外：simplemma.lemmatize('counseling') 還原結果就是 'counseling'
+    # 本身（不再往下縮），所以覆寫值維持美式拼法不變。
+    "travelling": "travel",
+    "modelling": "model",
+    "cancelling": "cancel",
+    "labelling": "label",
+    "signalling": "signal",
+    "counselling": "counseling",
 }
 
 

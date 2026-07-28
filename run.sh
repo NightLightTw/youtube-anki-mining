@@ -151,11 +151,14 @@ step "下載影片 (360p)"
 # 6) 全自動挑字製卡（已挖過的字會被去重跳過，可重跑不會重複灌卡）
 # 注意：macOS 內建 /bin/bash 是 3.2，`set -u` 下展開空陣列會噴 unbound variable，
 # 所以用長度判斷分兩支呼叫，不能直接寫 "${EXTRA_ARGS[@]}"。
+# VIDEO_ID 放最後且前面加 `--`：YouTube ID 偶爾以 - 開頭（如 -JJ4OE0rZJo），
+# argparse 若把它排在其他選項之前會誤判成未知旗標而整個報錯；`--` 只讓它之後的
+# token 停止當選項解析，所以其他旗標都要留在 `--` 之前。
 step "全自動製卡"
 if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
-  "$PY" mine.py "$VIDEO_ID" --auto --title "$TITLE" "${EXTRA_ARGS[@]}"
+  "$PY" mine.py --auto --title "$TITLE" "${EXTRA_ARGS[@]}" -- "$VIDEO_ID"
 else
-  "$PY" mine.py "$VIDEO_ID" --auto --title "$TITLE"
+  "$PY" mine.py --auto --title "$TITLE" -- "$VIDEO_ID"
 fi
 
 # 7) 同步到 AnkiWeb（手機下拉同步即可看到新卡）
