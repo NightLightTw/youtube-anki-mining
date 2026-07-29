@@ -413,6 +413,63 @@ def _mw_get(ref, key, word):
     return _http_get_json(url, timeout=10)
 
 
+def _ise_to_ize(word):
+    """英式 -ise 動詞轉美式 -ize 拼法，供 MW 查無詞條時的備援重試。
+
+    MW（美式辭典）只收 -ize 拼法為 headword，實測 12 個常見英式動詞
+    （prioritise/organise/realise/recognise...）用 -ise 拼法查詢，headword 完全比對
+    100% 失敗、定義留空——這不是 simplemma 的還原錯誤（-ise 本身就是合法原形，
+    不該被 LEMMA_OVERRIDES 覆寫掉，那樣會讓卡片顯示美式拼法而非影片實際講的字），
+    純粹是 MW 收錄拼法的限制，該在查詢層做備援，不動卡片顯示的原始拼法。
+    -ise 結尾也有 promise/surprise/comprise 這類非動詞衍生詞，替換成 -ize 版本
+    在 MW 一樣查無此字，跟原本一樣拿不到東西，不會比現在更糟。
+    """
+    if word.lower().endswith("ise") and len(word) > 4:
+        return word[:-3] + "ize"
+    return None
+
+
+def _filter_homographs(data, word, from_thesaurus=False):
+    """從 MW API 回傳的 entry 陣列中，只留 headword 完全等於 word 的詞條。
+
+    避免 MW 查無時混入的相近字詞條（metabolic→metabolism）或誤抓到的組合詞
+    （pedal→soft-pedal）。learners 用 hwi.hw，thesaurus 用 meta.id。
+    """
+    out = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue  # 查無此字時 API 回傳拼字建議字串
+        if from_thesaurus:
+            hw = entry.get("meta", {}).get("id", "").split(":")[0]
+        else:
+            hw = entry.get("hwi", {}).get("hw", "")
+        hw = re.sub(r"[*]", "", hw).lower()
+        if hw == word.lower():
+            out.append(entry)
+    return out
+
+
+def _mw_lookup_with_fallback(ref, key, word, from_thesaurus=False):
+    """查 MW，headword 比對不到東西時用 -ise→-ize 備援重試一次。
+
+    回傳 (homographs, 實際命中的拼法)；都查無則回傳 ([], word)。
+    """
+    data = _mw_get(ref, key, word)
+    homographs = _filter_homographs(data, word, from_thesaurus)
+    if homographs:
+        return homographs, word
+    alt = _ise_to_ize(word)
+    if alt:
+        try:
+            data = _mw_get(ref, key, alt)
+            homographs = _filter_homographs(data, alt, from_thesaurus)
+            if homographs:
+                return homographs, alt
+        except Exception:
+            pass  # 備援查詢本身失敗（逾時等）就當作沒查到，不影響主流程的錯誤處理
+    return [], word
+
+
 def _mw_clean(text):
     """去掉 MW 的標記符號（{bc}、{it}...{/it}、{sx|...}、—often 等）。"""
     text = re.sub(r"\{bc\}", ": ", text)
@@ -560,14 +617,7 @@ def fetch_definition(word, sentence="", surface=""):
     if not MW_LEARNERS_KEY:
         return ""
     try:
-        data = _mw_get("learners", MW_LEARNERS_KEY, word)
-        homographs = []
-        for entry in data:
-            if not isinstance(entry, dict):
-                continue  # 查無此字時 API 回傳拼字建議字串
-            hw = re.sub(r"[*]", "", entry.get("hwi", {}).get("hw", "")).lower()
-            if hw == word.lower():
-                homographs.append(entry)
+        homographs, _ = _mw_lookup_with_fallback("learners", MW_LEARNERS_KEY, word)
         if not homographs:
             return ""
         wanted_pos = _guess_pos(surface or word, sentence) if sentence else None
@@ -632,14 +682,8 @@ def fetch_synonyms(word, n_syn=6, n_ant=4, sentence="", surface=""):
     if not MW_THESAURUS_KEY:
         return ""
     try:
-        data = _mw_get("thesaurus", MW_THESAURUS_KEY, word)
-        homographs = []
-        for entry in data:
-            if not isinstance(entry, dict):
-                continue
-            hw = re.sub(r"[*]", "", entry.get("meta", {}).get("id", "").split(":")[0]).lower()
-            if hw == word.lower():
-                homographs.append(entry)
+        homographs, _ = _mw_lookup_with_fallback(
+            "thesaurus", MW_THESAURUS_KEY, word, from_thesaurus=True)
         if not homographs:
             return ""
         wanted_pos = _guess_pos(surface or word, sentence) if sentence else None
