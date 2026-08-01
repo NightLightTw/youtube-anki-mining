@@ -71,6 +71,37 @@ LEMMA_OVERRIDES = {
     "labelling": "label",
     "signalling": "signal",
     "counselling": "counseling",
+    # 更廣泛的系統性瑕疵：simplemma 對某些動詞的 -ing/-ed/不規則變化，會誤還原成
+    # 一個帶古英文風格字尾 e 的罕見/不存在字（實測 lemma('gone')='gan'、
+    # lemma('thinking')='thinke'、lemma('singing')='singe'），不限於雙l動名詞這個
+    # 子類。這份清單無法窮舉（任何動詞都可能中招），遇到新的就照兩條規則加：
+    #   - 不規則動詞（go/run 這類）：覆寫成「最終正確原形」（gone→go、ran→run），
+    #     因為這些字幾乎不會有其他合法獨立詞義，直接還原到底最安全。
+    #   - 規則動詞的 -ing/-ed（talking/singing 這類）：覆寫成「原始拼寫本身」，
+    #     不強制縮並到原形動詞——比照 heating/cleaner/flooding 的既有原則，
+    #     這些 -ing 形態本身也可能是合法獨立名詞，縮並過頭在其他句子會選錯字，
+    #     這裡只是要把「錯誤還原成不存在的字」這個問題消掉，不是要解決
+    #     同詞性判斷的天花板問題（那是 _guess_pos 的職責，非 lemma 層級）。
+    "went": "go",
+    "gone": "go",
+    "ran": "run",
+    "thinking": "thinking",
+    "growing": "growing",
+    "talking": "talking",
+    "talked": "talked",
+    "playing": "playing",
+    "played": "played",
+    "singing": "singing",
+    "swinging": "swinging",
+    # 經 codex review 提醒範圍可能更廣，實測驗證後追加的規則動詞 -ed 案例
+    # （thanked→thanke、asked→aske...，還原結果詞頻趨近 0，確認是同類損毀）。
+    "thanked": "thanked",
+    "laughed": "laughed",
+    "claimed": "claimed",
+    "answered": "answered",
+    "asked": "asked",
+    "fixed": "fixed",
+    "developed": "developed",
 }
 
 
