@@ -175,6 +175,17 @@ def sentence_unknowns(text, known, proper, min_zipf, max_zipf):
             continue
         if any(c in w for c in APOSTROPHES):  # 縮寫 (here's, we'll) → 跳過
             continue
+        if w.endswith("-"):
+            # 自動字幕逐字稿有時會保留真人說話中斷的殘缺片段（"gonna ch- turn a
+            # corner"，說到一半改口），連字號留在字尾，正規表達式仍會把它當一個
+            # token 抓出來。真正合法的連字詞（hunter-gatherer、self-esteem）連字號
+            # 一定夾在字母中間、絕不會落在字尾，這個判斷不會誤殺合法詞。
+            # 已知涵蓋範圍外的邊界（經 codex review 提醒，評估後判斷不需為此加更多
+            # 防呆）：懸空連字號("pre- and post-war")是書面正式文體用法，口語字幕
+            # 幾乎不會出現，且就算出現，濾掉"pre-"這種前綴殘片對單字卡應用而言本來
+            # 就是正確結果；en dash（–）或字首連字號的殘缺片段目前抓不到，但自動
+            # 字幕轉錄極少用 en dash 標記語言中斷，實務發生率低，暫不處理。
+            continue
         lm = lemma(w)
         # 專有名詞：句中大寫預掃，或「大寫且在常見人名表」（限大寫，免誤排 mark/mike 等小寫常用字）
         if lm in proper or (w[0].isupper() and lm in COMMON_NAMES):
