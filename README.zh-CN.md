@@ -96,7 +96,7 @@
 
 ### 1. 安装 AnkiConnect
 
-在 Anki 里：`Tools → Add-ons → Get Add-ons`，粘贴代码 **`2055492159`**，重启 Anki。
+在 Anki 里：`Tools → Add-ons → Get Add-ons`，粘贴代码 **`2055492159`**（这是 AnkiConnect 在 AnkiWeb 官方插件商店的识别编号，可到[官方页面](https://ankiweb.net/shared/info/2055492159)核对），重启 Anki。
 
 预设设置（监听 `127.0.0.1:8765`）即可直接使用，不需改 Config。验证：
 ```bash

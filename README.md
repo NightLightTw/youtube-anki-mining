@@ -94,7 +94,7 @@
 
 ### 1. 安裝 AnkiConnect
 
-在 Anki 裡：`Tools → Add-ons → Get Add-ons`，貼上代碼 **`2055492159`**，重啟 Anki。
+在 Anki 裡：`Tools → Add-ons → Get Add-ons`，貼上代碼 **`2055492159`**（這是 AnkiConnect 在 AnkiWeb 官方外掛商店的識別編號，可到[官方頁面](https://ankiweb.net/shared/info/2055492159)核對），重啟 Anki。
 
 預設設定（監聽 `127.0.0.1:8765`）即可直接使用，不需改 Config。驗證：
 ```bash
