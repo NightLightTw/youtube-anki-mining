@@ -124,6 +124,32 @@ WORD_CHARS = r"A-Za-zÀ-ÖØ-öø-ÿ"
 # 就會被誤選成候選字）。兩種引號都要能組成完整詞。
 APOSTROPHES = "'’"
 
+# 拼寫數字（forty-five、nineteen...）實測會落在生字頻率帶內被選中（例：
+# zipf('fifty-nine')=4.19，在預設篩選區間 2.5~4.2 內），但拼寫數字從來不是有意義
+# 的單字卡目標——學習者需要的是聽力/數字轉換能力，不是把某個特定數字的拼法背下來。
+# 用組合詞判斷（而非固定表窮舉）：token 用連字號拆開後，每一段都屬於這個基礎數字詞
+# 集合，就視為拼寫數字整體擋掉（涵蓋 twenty-one ~ ninety-nine 這類組合）。
+_NUMBER_WORDS = {
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
+    "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million",
+    "billion", "trillion",
+}
+
+
+def _is_spelled_number(w):
+    """判斷 w 是不是純粹的拼寫數字（該擋掉），而非數字詞組成的慣用語（不該擋）。
+
+    真正的複合基數詞（fifty-nine=59）兩段一定不同（十位+個位）；兩段完全相同
+    （fifty-fifty）在英文裡從來不是拿來拼出一個數字，而是「對半、五五波」這種
+    慣用語，是有意義的學習內容，不該被這個過濾器誤殺。
+    """
+    parts = w.lower().split("-")
+    if len(parts) > 1 and len(set(parts)) == 1:
+        return False
+    return all(part in _NUMBER_WORDS for part in parts)
+
 
 def _clean_first_field(val):
     val = re.sub(r"\[sound:[^\]]*\]", " ", val)
@@ -192,6 +218,8 @@ def sentence_unknowns(text, known, proper, min_zipf, max_zipf):
             continue
         if w.lower() in NON_LEARNING_WORDS or lm in NON_LEARNING_WORDS:
             continue    # 口語拼寫/填充詞：做不成有意義的卡
+        if _is_spelled_number(w):
+            continue    # 拼寫數字（forty-five、nineteen...）不是有意義的單字卡目標
         if lm in known or lm in seen or len(lm) < 3:
             continue
         z = zipf_frequency(lm, "en")

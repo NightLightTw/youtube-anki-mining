@@ -120,10 +120,25 @@ echo "  標題: $TITLE"
 # 4) 下載英文字幕（--write-subs 人工字幕 + --write-auto-subs 自動字幕並用：
 #    部分影片如 BBC 只有人工上傳字幕、沒有 en 自動字幕，兩旗標並用時 yt-dlp
 #    會優先抓品質較好的人工字幕。若已存在則直接覆蓋，天然可重跑）
+#    --sub-lang 用 "en.*" 正則而非精確比對 "en"：部分影片（實測多支 BBC 節目）
+#    字幕語言標籤是 en-GB 這類地區變體、不是單純的 en，精確比對會直接找不到字幕
+#    而整支失敗。下載後統一改名成 .en.srt，因為 mine.py 是用固定檔名
+#    {video_id}.en.srt 找字幕的，不知道地區變體這回事。
 step "下載字幕"
-"$YTDLP" --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs \
-  --sub-lang en --sub-format srt --convert-subs srt -o "media/%(id)s.%(ext)s" "$URL"
 SRT="media/${VIDEO_ID}.en.srt"
+# 先清掉舊的 .en*.srt 殘留（不論是先前用純 en 抓到的正規檔名、還是地區變體），
+# 保證等一下抓完後 glob 到的一定是這次剛下載的新檔，不會因為舊檔已存在、
+# [ ! -s "$SRT" ] 判斷為 false 而漏掉 rename、悄悄用到過期字幕（重跑同一支影片
+# 卻拿到舊內容，且不會有任何錯誤訊息，非常隱蔽）。
+rm -f "media/${VIDEO_ID}".en*.srt
+"$YTDLP" --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs \
+  --sub-lang "en.*" --sub-format srt --convert-subs srt -o "media/%(id)s.%(ext)s" "$URL"
+if [ ! -s "$SRT" ]; then
+  FOUND_SRT=$(ls "media/${VIDEO_ID}".en*.srt 2>/dev/null | head -1 || true)
+  if [ -n "$FOUND_SRT" ]; then
+    mv "$FOUND_SRT" "$SRT"
+  fi
+fi
 if [ ! -s "$SRT" ]; then
   echo "✗ 找不到英文字幕檔：$SRT" >&2
   echo "  這支影片可能沒有英文字幕（人工或自動皆無），無法用本工具製卡。" >&2
@@ -135,18 +150,35 @@ fi
 #      有 json3 時 mine.py 會優先用它校正時間軸，切出來的音檔準得多。
 #      只有自動字幕有這個欄位；純人工字幕的影片抓不到是正常的，不影響製卡。
 step "下載逐字時間戳 (json3，可選)"
-if "$YTDLP" --no-warnings --no-playlist --skip-download --write-auto-subs \
-     --sub-lang en --sub-format json3 -o "media/%(id)s.%(ext)s" "$URL" >/dev/null 2>&1 \
-   && [ -s "media/${VIDEO_ID}.en.json3" ]; then
+JSON3="media/${VIDEO_ID}.en.json3"
+rm -f "media/${VIDEO_ID}".en*.json3   # 同上，避免悄悄用到重跑前的舊逐字時間戳
+"$YTDLP" --no-warnings --no-playlist --skip-download --write-auto-subs \
+  --sub-lang "en.*" --sub-format json3 -o "media/%(id)s.%(ext)s" "$URL" >/dev/null 2>&1 || true
+if [ ! -s "$JSON3" ]; then
+  FOUND_JSON3=$(ls "media/${VIDEO_ID}".en*.json3 2>/dev/null | head -1 || true)
+  if [ -n "$FOUND_JSON3" ]; then
+    mv "$FOUND_JSON3" "$JSON3"
+  fi
+fi
+if [ -s "$JSON3" ]; then
   echo "  ✓ 已取得逐字時間戳"
 else
   echo "  – 這支影片沒有英文自動字幕，改用 SRT 內插時間（正常，不影響製卡）"
 fi
 
 # 5) 下載 360p 影片（做音檔/截圖用；若已存在會被覆蓋，可重跑）
+# yt-dlp 預設會挑一個 player client（常自動選到 android_vr），近期實測這個 client
+# 常被 YouTube 回 403 擋下，但同一支影片換成明確指定 android client 立刻就能下載成功
+# （已連續在多支影片上驗證），所以先跑預設，失敗了就自動retry一次、明確指定 android
+# client，省去每次都要手動介入重試。
 step "下載影片 (360p)"
-"$YTDLP" --no-warnings --no-playlist -f "best[height<=360]/bestvideo[height<=360]+bestaudio/best" \
-  --merge-output-format mp4 -o "media/%(id)s.%(ext)s" "$URL"
+if ! "$YTDLP" --no-warnings --no-playlist -f "best[height<=360]/bestvideo[height<=360]+bestaudio/best" \
+  --merge-output-format mp4 -o "media/%(id)s.%(ext)s" "$URL"; then
+  echo "  預設 client 下載失敗（常見原因：YouTube 暫時擋下 android_vr client），改用 android client 重試..." >&2
+  "$YTDLP" --no-warnings --no-playlist --extractor-args "youtube:player_client=android" \
+    -f "best[height<=360]/bestvideo[height<=360]+bestaudio/best" \
+    --merge-output-format mp4 -o "media/%(id)s.%(ext)s" "$URL"
+fi
 
 # 6) 全自動挑字製卡（已挖過的字會被去重跳過，可重跑不會重複灌卡）
 # 注意：macOS 內建 /bin/bash 是 3.2，`set -u` 下展開空陣列會噴 unbound variable，

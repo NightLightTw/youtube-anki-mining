@@ -414,19 +414,39 @@ def _mw_get(ref, key, word):
 
 
 def _ise_to_ize(word):
-    """英式 -ise 動詞轉美式 -ize 拼法，供 MW 查無詞條時的備援重試。
+    """英式 -ise 動詞轉美式 -ize 拼法。
 
-    MW（美式辭典）只收 -ize 拼法為 headword，實測 12 個常見英式動詞
-    （prioritise/organise/realise/recognise...）用 -ise 拼法查詢，headword 完全比對
-    100% 失敗、定義留空——這不是 simplemma 的還原錯誤（-ise 本身就是合法原形，
-    不該被 LEMMA_OVERRIDES 覆寫掉，那樣會讓卡片顯示美式拼法而非影片實際講的字），
-    純粹是 MW 收錄拼法的限制，該在查詢層做備援，不動卡片顯示的原始拼法。
     -ise 結尾也有 promise/surprise/comprise 這類非動詞衍生詞，替換成 -ize 版本
     在 MW 一樣查無此字，跟原本一樣拿不到東西，不會比現在更糟。
     """
     if word.lower().endswith("ise") and len(word) > 4:
         return word[:-3] + "ize"
     return None
+
+
+def _ller_to_ler(word):
+    """英式雙l名詞（traveller/counsellor/jeweller）轉美式單l拼法。
+
+    只在字尾符合 -ller/-llor 時轉換（去掉一個l），不會誤傷 caller/seller/teller/
+    smaller 這類本來就雙l、美式英式拼法一致的字——因為這些字直接查詢就能在 MW
+    找到對應的 headword，根本不會走到這個備援分支；只有「查無此字」時才會嘗試這個
+    轉換，所以最壞情況跟現在一樣查無定義，不會比現在更糟。
+    """
+    w = word.lower()
+    if w.endswith("ller") and len(word) > 5:
+        return word[:-4] + "ler"
+    if w.endswith("llor") and len(word) > 5:
+        return word[:-4] + "lor"
+    return None
+
+
+# MW（美式辭典）常常不收英式拼法為 headword，實測多個常見英式字（prioritise/
+# organise/realise/recognise...用-ise、traveller/counsellor/jeweller...用雙l）
+# 查詢時 headword 完全比對 100% 失敗、定義留空——這不是 simplemma 的還原錯誤
+# （這些字本身就是合法原形，不該被 LEMMA_OVERRIDES 覆寫掉，那樣會讓卡片顯示美式
+# 拼法而非影片實際講的字），純粹是 MW 收錄拼法的限制，該在查詢層做備援，不動卡片
+# 顯示的原始拼法。依序嘗試這份清單，第一個在 MW 查得到的就採用。
+_SPELLING_VARIANTS = [_ise_to_ize, _ller_to_ler]
 
 
 def _filter_homographs(data, word, from_thesaurus=False):
@@ -450,7 +470,7 @@ def _filter_homographs(data, word, from_thesaurus=False):
 
 
 def _mw_lookup_with_fallback(ref, key, word, from_thesaurus=False):
-    """查 MW，headword 比對不到東西時用 -ise→-ize 備援重試一次。
+    """查 MW，headword 比對不到東西時依序嘗試 _SPELLING_VARIANTS 的拼法備援。
 
     回傳 (homographs, 實際命中的拼法)；都查無則回傳 ([], word)。
     """
@@ -458,15 +478,17 @@ def _mw_lookup_with_fallback(ref, key, word, from_thesaurus=False):
     homographs = _filter_homographs(data, word, from_thesaurus)
     if homographs:
         return homographs, word
-    alt = _ise_to_ize(word)
-    if alt:
+    for variant_fn in _SPELLING_VARIANTS:
+        alt = variant_fn(word)
+        if not alt:
+            continue
         try:
             data = _mw_get(ref, key, alt)
             homographs = _filter_homographs(data, alt, from_thesaurus)
             if homographs:
                 return homographs, alt
         except Exception:
-            pass  # 備援查詢本身失敗（逾時等）就當作沒查到，不影響主流程的錯誤處理
+            pass  # 備援查詢本身失敗（逾時等）就當作沒查到，換下一個變體或放棄
     return [], word
 
 
