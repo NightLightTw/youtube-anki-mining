@@ -13,6 +13,7 @@ import base64
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import subprocess
@@ -835,6 +836,24 @@ def main():
         ap.error("手動模式需同時提供 --index 與 --word")
     if args.dry_run and not args.auto:
         ap.error("--dry-run 只能搭配 --auto")
+
+    # 數值參數驗證：負數/顛倒的區間不會直接報錯，而是觸發 Python slice 或
+    # range 比較的非直覺行為（如 --max-cards -1 會靜默少做一張卡），提早擋掉
+    if args.max_cards < 1:
+        ap.error(f"--max-cards 需為正整數（收到 {args.max_cards}）")
+    if args.min_words < 1 or args.max_words < args.min_words:
+        ap.error(f"--min-words/--max-words 需為正整數且 min ≤ max"
+                 f"（收到 {args.min_words}/{args.max_words}）")
+    # NaN 會讓所有比較都是 False：不但通過下面的區間檢查，還會讓 autopick 的
+    # z < min / z > max 頻率篩選整個形同失效，必須先擋掉
+    if not (math.isfinite(args.min_zipf) and math.isfinite(args.max_zipf)):
+        ap.error(f"--min-zipf/--max-zipf 需為有限數值"
+                 f"（收到 {args.min_zipf}/{args.max_zipf}）")
+    if args.min_zipf > args.max_zipf:
+        ap.error(f"--min-zipf 不可大於 --max-zipf"
+                 f"（收到 {args.min_zipf}/{args.max_zipf}）")
+    if args.index is not None and args.index < 0:
+        ap.error(f"--index 需為非負整數（收到 {args.index}）")
 
     srt = f"{MEDIA_DIR}/{args.video_id}.en.srt"
     video = f"{MEDIA_DIR}/{args.video_id}.mp4"

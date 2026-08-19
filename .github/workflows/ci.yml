@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+      - name: Run tests
+        run: pytest -q
+      - name: Shell syntax check
+        run: bash -n run.sh
+
+  readme-zh-cn-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install OpenCC
+        # 釘版本：--check 是對轉換結果做完整比對，OpenCC 詞庫更新會讓
+        # 未改動的 README 也檢查失敗；升級時需與本機生成用的版本一起換
+        run: pip install opencc==1.4.1
+      - name: Check README.zh-CN.md is in sync with README.md
+        run: python scripts/gen_readme_zh_cn.py --check

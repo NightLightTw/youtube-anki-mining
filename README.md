@@ -1,14 +1,26 @@
 # YouTube → Anki 英文單字挖掘系統
 
+**繁體中文** | [简体中文](README.zh-CN.md)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/一鍵流程-macOS-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 
-**貼一個 YouTube 網址，自動把影片字幕變成帶真人發音的 Anki 單字卡。**
+**貼一個 YouTube 網址，自動把影片字幕變成帶真人發音的 Anki 單字卡。**（完成一次性安裝後，日常使用就是一行指令）
 
 ![成品卡片示範](docs/card-demo.png)
 
 *↑ 實際成品：例句標色目標字、Merriam-Webster 英英定義、繁中釋義、同反義字、從影片剪出的句子發音、可回看的時間戳連結——全部自動生成。*
+
+<details>
+<summary><b>🌐 English TL;DR</b> (for non-Chinese readers)</summary>
+
+- **What it does**: Paste a YouTube URL → automatically mines Anki sentence cards from the video's English subtitles: target word, highlighted example sentence, Merriam-Webster definition, Chinese gloss, sentence audio clipped from the actual video, and a timestamped link back to the source.
+- **Who it's for**: Chinese-speaking English learners who use Anki — the cards carry Chinese glosses, and the docs are written in Chinese.
+- **Requirements**: macOS for the one-command flow (the Python pipeline itself has no OS-specific code but is untested elsewhere), Anki desktop + AnkiConnect, Python 3.10+, ffmpeg. Optional: free Merriam-Webster API keys for definitions/synonyms. Mobile review works via AnkiWeb sync (AnkiMobile on iOS is a paid app; AnkiDroid on Android is free).
+- **Limitations**: word picking and sense selection are rule-based (frequency + heuristics, no LLM yet) — expect to prune a few off-target cards after each run. See the Roadmap for planned LLM-assisted disambiguation.
+
+</details>
 
 ## ✨ 核心特色
 
@@ -123,6 +135,12 @@ MW_THESAURUS_KEY=你的-thesaurus-key
 
 <a id="quick-start"></a>
 ## 快速開始
+
+> **執行前你該知道的資料流**——這個工具會：
+> 1. **讀取**你本機 Anki 所有牌組的單字，用來排除已有的字（只讀不改，不會動你既有的卡片）
+> 2. **下載**該影片的英文字幕與 360p 影片檔到專案的 `media/` 目錄
+> 3. **送出**目標單字到 Merriam-Webster API（若有設金鑰）與 Google 翻譯非官方端點查定義與翻譯
+> 4. 製卡完成後**自動同步** AnkiWeb（等同你手動按 Anki 的同步鈕）
 
 ```bash
 ./run.sh "https://youtu.be/xxxxxxxxxxx"
@@ -250,6 +268,7 @@ cd /path/to/youtube-anki-mining
 | 卡片跑進「預設」牌組 | 某些版本 AnkiConnect 的 `addNote` 忽略 `deckName`；`mine.py` 已用 `changeDeck` 處理。 |
 | iPhone 上斷圖／斷音 | 媒體檔名大小寫不一致（iOS 區分大小寫）。`mine.py` 已把檔名一律小寫。 |
 | 句子破碎/不完整 | 該影片只有自動字幕，品質有限；可換索引或用手動模式修句。 |
+| 製卡中途失敗後，媒體庫多出沒被引用的音檔 | 音檔先上傳、note 後建立，中途失敗會留下孤兒媒體。無害；在 Anki `工具 → 檢查媒體` 可一鍵清除未使用的媒體檔。 |
 
 ---
 
@@ -316,9 +335,11 @@ Python 管線 (yt-dlp + ffmpeg) → AnkiConnect(:8765) → Anki 桌面 → AnkiW
 | `setup_anki.py` | 建立/更新 deck 與 note type（idempotent） |
 | `mine.py` | 自動管線：字幕 → 句子重建 → ffmpeg → 送卡（含 `--auto` 全自動挑字）|
 | `autopick.py` | 全自動挑字：已知字庫擷取 + 頻率過濾 + i+1 選字 |
-| `sync_monkeytype.py` | 選配整合：把卡片單字庫與例句庫寫進相鄰的 monkeytype 打字練習專案，並改寫其短句白名單。`run.sh` 偵測到 `../monkeytype` 目錄存在時自動執行並修改該專案的檔案，否則靜默跳過，一般使用者不受影響 |
+| `sync_monkeytype.py` | 選配整合：把卡片單字庫與例句庫寫進相鄰的 monkeytype 打字練習專案，並改寫其短句白名單。**預設關閉**——需在 `.env` 加 `SYNC_MONKEYTYPE=1` 且相鄰目錄 `../monkeytype` 存在，`run.sh` 才會執行它（因為會修改另一個專案的檔案，不該是隱含副作用） |
 | `make_apkg.py` | 產出 `YT_Mining_EN.apkg`（note type 備援） |
 | `add_cors.py` | 把瀏覽器擴充 origin 加進 AnkiConnect CORS 白名單（asbplayer 路線用） |
+| `tests/` | pytest 回歸測試：案例來自實際處理影片時修過的坑（挑字過濾、詞形覆寫、拼法備援、字幕句子重建），CI 每次提交都會跑 |
+| `scripts/gen_readme_zh_cn.py` | 從繁體 README 自動生成簡體版（OpenCC tw2sp），CI 強制兩版同步 |
 | `docs/` | README 素材 |
 | `youtube-anki-mining-spec.md` | 原始設計規格 |
 
