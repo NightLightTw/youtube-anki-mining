@@ -37,7 +37,9 @@
 <a id="what-is-this"></a>
 ## 這是什麼？
 
-這是一套 **sentence mining（句子挖掘）** 工具：與其背單字表，不如從你真正看的影片裡收集「含生字的完整句子」來學——有語境、有聲音、有畫面來源，記憶效果遠比孤立單字好。
+**[Anki](https://apps.ankiweb.net)** 是一款免費開源的記憶卡軟體，靠「間隔重複」演算法安排複習時機——快忘記的卡多出現、記熟的卡少出現，是語言學習圈公認最有效的背單字工具之一。桌面版免費，另有手機 App 可透過免費的 AnkiWeb 帳號跨裝置同步（iOS 版 AnkiMobile 需在 App Store 購買，詳情見該 App 說明；Android 版 AnkiDroid 免費）。
+
+本專案則是一套餵料給 Anki 的 **sentence mining（句子挖掘）** 工具：與其背單字表，不如從你真正看的影片裡收集「含生字的完整句子」來學——有語境、有聲音、有畫面來源，記憶效果遠比孤立單字好。
 
 挑字遵循 **i+1 原則**（輸入內容只比現有程度難一點點）：每張卡的例句**只鎖定一個目標生字**——排除你 Anki 牌組裡已有的字後，整句剛好只含一個落在學習頻率帶內的新字，語境負擔最小。
 
@@ -71,7 +73,7 @@
 | 項目 | 說明 |
 |---|---|
 | PO Token Server | YouTube 擋下載時的解法，見[專門章節](#po-token-server) |
-| 手機版 Anki | 想在手機複習才需要：iPhone 用 [AnkiMobile](https://apps.apple.com/app/ankimobile-flashcards/id373493387)（付費）、Android 用 [AnkiDroid](https://play.google.com/store/apps/details?id=com.ichi2.anki)（免費），透過免費的 AnkiWeb 帳號同步 |
+| 手機版 Anki | 想在手機複習才需要：iPhone 用 [AnkiMobile](https://apps.apple.com/app/ankimobile-flashcards/id373493387)（需在 App Store 購買，詳情見該 App 說明）、Android 用 [AnkiDroid](https://play.google.com/store/apps/details?id=com.ichi2.anki)（免費），透過免費的 AnkiWeb 帳號同步 |
 
 ---
 
