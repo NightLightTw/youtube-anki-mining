@@ -108,6 +108,26 @@ def test_plural_override():
     assert lemma("taxes") == "tax"
 
 
+def test_bussed_lemma_override():
+    # simplemma 誤還原成罕見古字 "buss"（親吻），跟公車完全無關
+    assert lemma("bussed") == "bus"
+
+
+def test_preferred_identity_override():
+    # simplemma 誤還原成不存在的字 "preferr"
+    assert lemma("preferred") == "preferred"
+    assert lemma("preferring") == "preferring"
+
+
+def test_british_double_l_ed_form_overrides():
+    # 跟既有的 -ing 形覆寫（travelling→travel 等）是同一批字的 -ed 形，同樣的錯誤
+    assert lemma("travelled") == "travel"
+    assert lemma("modelled") == "model"
+    assert lemma("cancelled") == "cancel"
+    assert lemma("labelled") == "label"
+    assert lemma("signalled") == "signal"
+
+
 # ---------- i+1 選句 ----------
 
 def _sent(text):

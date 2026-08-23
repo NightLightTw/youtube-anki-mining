@@ -71,6 +71,14 @@ LEMMA_OVERRIDES = {
     "labelling": "label",
     "signalling": "signal",
     "counselling": "counseling",
+    # 同一批字的 -ed 形（過去式/過去分詞）踩到一模一樣的雙l還原錯誤，之前只顧到
+    # -ing 形，經 codex review 提醒才發現漏網：simplemma.lemmatize('travelled')
+    # 一樣還原成不存在的 'travell'。covering 同一套字，維持同樣的覆寫值。
+    "travelled": "travel",
+    "modelled": "model",
+    "cancelled": "cancel",
+    "labelled": "label",
+    "signalled": "signal",
     # 更廣泛的系統性瑕疵：simplemma 對某些動詞的 -ing/-ed/不規則變化，會誤還原成
     # 一個帶古英文風格字尾 e 的罕見/不存在字（實測 lemma('gone')='gan'、
     # lemma('thinking')='thinke'、lemma('singing')='singe'），不限於雙l動名詞這個
@@ -102,6 +110,15 @@ LEMMA_OVERRIDES = {
     "asked": "asked",
     "fixed": "fixed",
     "developed": "developed",
+    "preferred": "preferred",
+    "preferring": "preferring",
+    # bussed（雙s英式/口語拼法，"school children are bussed to zoos"）被還原成
+    # "buss"——一個罕見古字，意思是「親吻」，跟公車完全無關。覆寫到最終正確原形
+    # "bus"（比照 went→go 的準則）而非覆寫成自己："bussed" 幾乎只會出現在「用巴士
+    # 載」這個意思，"buss(親吻)"的過去式用這個拼法在現代英文極罕見，兩者衝突機率
+    # 低到可以接受這個取捨（經 codex review 提醒這個理論邊界，權衡後維持此寫法）。
+    # 單s拼法 bused/buses/busing 已能正確還原，不受影響，不需額外覆寫。
+    "bussed": "bus",
 }
 
 
