@@ -103,6 +103,39 @@ def test_build_sentences_times_are_sane(tmp_path):
     assert 0.0 <= second["start"] < 8.0
 
 
+def test_overlapping_cues_use_next_cue_start_as_span():
+    """YouTube 滾動字幕的 cue 會重疊：cue 的結束時間是「這行從畫面消失」，
+    不是「這行話講完」。內插必須改用下一個 cue 的開始當實際結束點，否則 cue 後段
+    的字會被推到好幾秒之後（實測有 cue 標稱 6.4 秒、實際 1.9 秒就講完，導致
+    句首被推遲 3.4 秒、切出來的音檔漏掉半句）。
+
+    差異只在「句子從 cue 中間開始」時顯現——句子剛好在 cue 邊界開始的話，
+    起點就是 cue 起點，兩種算法一樣。真實案例正是這種形態：
+    cue 內容為 "...small business. What's"，下一句從 "What's" 起頭。
+    """
+    cues = [
+        (0.0, 6.0, "aaa bbb. ccc ddd"),   # 標稱 6 秒，但下個 cue 2 秒就開始
+        (2.0, 8.0, "eee fff."),
+    ]
+    sents = build_sentences(cues)
+    assert sents[1]["text"].startswith("ccc")
+    # 實際跨度 2 秒、四個字 → "ccc" 是第 3 個字，起點應在 1.0 秒附近。
+    # 若誤用標稱的 6 秒跨度，會算成 3.0 秒（晚兩秒，正是這個 bug 的症狀）。
+    assert 0.9 <= sents[1]["start"] <= 1.1
+
+
+def test_non_overlapping_cues_behaviour_unchanged():
+    """一般不重疊的字幕：下一個 cue 的開始 >= 本 cue 結束，取 min 後等同原本行為。"""
+    cues = [
+        (0.0, 4.0, "aaa bbb. ccc ddd"),   # 4 秒內講完，下個 cue 5 秒才開始
+        (5.0, 8.0, "eee fff."),
+    ]
+    sents = build_sentences(cues)
+    assert sents[1]["text"].startswith("ccc")
+    # 跨度仍是完整的 4 秒、四個字各 1 秒 → "ccc" 起點 2.0 秒，不受修正影響
+    assert 1.9 <= sents[1]["start"] <= 2.1
+
+
 def test_build_sentences_handles_no_trailing_punctuation():
     # 最後一句沒有句尾標點也要收尾，不能默默丟掉
     cues = [(0.0, 2.0, "An unfinished thought")]

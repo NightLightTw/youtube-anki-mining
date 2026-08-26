@@ -176,10 +176,17 @@ def build_sentences(cues):
         → 不論句子結束在 cue 中間或邊界，都不會吃到下一句太多聲音
     """
     words = []  # (word, cue_start, interp_start, interp_end)
-    for s, e, t in cues:
+    for i, (s, e, t) in enumerate(cues):
         toks = t.split()
         n = len(toks)
-        span = e - s
+        # 內插的時間跨度不能直接用 cue 自己的長度：YouTube 滾動字幕的 cue 會互相
+        # 重疊（每行留在畫面上直到下下行出現），所以 cue 的結束時間是「這行從畫面
+        # 消失」而不是「這行話講完」。實測有 cue 標稱 6.4 秒、實際 1.9 秒就講完，
+        # 用整段長度內插會把後面的字往後推到三秒之外。
+        # 下一個 cue 開始時，語音一定已經進到那一行，所以用它當實際結束點；
+        # 不重疊的一般字幕 next_start >= e，取 min 後等同原本行為，不受影響。
+        eff_end = min(e, cues[i + 1][0]) if i + 1 < len(cues) else e
+        span = max(0.0, eff_end - s)
         for j, w in enumerate(toks):
             words.append((w, s, s + span * j / n, s + span * (j + 1) / n))
     sentences, cur = [], []
