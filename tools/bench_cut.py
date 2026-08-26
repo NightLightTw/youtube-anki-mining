@@ -51,10 +51,23 @@ TRUTH_MIN_SCORE = 1.0
 BENCH_MIN_WORDS = 6
 BENCH_MAX_WORDS = 22
 
-# 判定為明顯瑕疵的門檻（秒）。0.25 秒大致是一個英文單字的長度，超過這個量級
-# 開頭就會少掉一個字、或結尾多出一個字，是聽得出來的。這個門檻是為了讓不同
-# 版本之間有共同基準，不是什麼精確的心理聲學界線。
-BAD_THRESHOLD = 0.25
+# 兩個門檻都由人耳盲測定出來，不是憑感覺挑的數字。
+#
+# 做法：兩輪各 14/20 題，音檔順序打亂、不標示預期答案，聽者只回答「結尾有沒有
+# 聽到下一句」三選一（乾淨／一點點但不影響／明顯）。兩輪都放了 0 秒與 1.4 秒
+# 以上的對照題，確認聽者的判準前後一致——實測 0 秒的 6 題全被聽成乾淨、
+# 1.4 秒以上的 6 題有 5 題聽成明顯，對照成立。
+#
+# 合併 34 題的結果（每格 n=4~6，樣本小，數字有雜訊，只取大趨勢）：
+#     超尾 0 秒      → 明顯 0%   、全部聽成乾淨
+#     0.3 ~ 1.1 秒   → 明顯 25~50%，多數是「一點點但不影響」
+#     1.1 秒以上     → 明顯 90%  （1.1~1.4 為 4/4、1.4 以上為 5/6）
+#
+# 所以真正的轉折點在 1.1 秒，那才是「會干擾複習」的量級；0.3 秒則是可察覺的
+# 下限（0.3 秒以上幾乎不再被聽成乾淨）。原本憑「一個英文單字約 0.25 秒」設的
+# 門檻把大量「聽得出來但不影響」的句子算成瑕疵，高估了問題規模。
+DETECTABLE_THRESHOLD = 0.30   # 聽得出來，但多數人覺得不影響
+BAD_THRESHOLD = 1.10          # 主要指標：會明顯干擾複習
 
 
 def unique_truth(words, sentence, hint_start, search=15.0,
@@ -197,17 +210,23 @@ def report(rows, skipped):
     bad_any = sum(1 for r in rows
                   if r["head_missing"] > BAD_THRESHOLD or r["tail_bleed"] > BAD_THRESHOLD)
 
+    det_h = sum(1 for v in head if v > DETECTABLE_THRESHOLD)
+    det_t = sum(1 for v in tail if v > DETECTABLE_THRESHOLD)
+
     print("兩個無法辯駁的失誤（都只用 json3 實測的「字開始時間」計算）")
-    print(f"主要指標是「超過 {BAD_THRESHOLD}s（約一個英文單字）的比例」；"
-          f"低於這個量級聽不出來，不列為瑕疵。\n")
+    print(f"門檻由 34 題人耳盲測定出：{DETECTABLE_THRESHOLD}s 起聽得出來、"
+          f"{BAD_THRESHOLD}s 以上會明顯干擾（主要指標）。\n")
     # 中位數/p90/最大都取全體樣本，不切換母體，避免出現「中位數大於 p90」這種
     # 看起來矛盾的並排（那是把超標子集的中位數跟全體的 p90 放在一起造成的）
-    print(f"{'':26} {'超標比例':>9} {'中位數':>9} {'p90':>8} {'最大':>8}")
-    for name, vals, bad in (("開頭被切掉（漏字）", head, bad_h),
-                            ("結尾吃到下一句", tail, bad_t)):
-        print(f"{name:26} {bad/n*100:>8.0f}% {statistics.median(vals):>9.3f} "
+    print(f"{'':26} {'>%.2fs' % DETECTABLE_THRESHOLD:>9} {'>%.2fs' % BAD_THRESHOLD:>9}"
+          f" {'中位數':>9} {'p90':>8} {'最大':>8}")
+    print(f"{'':26} {'(聽得出)':>9} {'(明顯)':>9}")
+    for name, vals, det, bad in (("開頭被切掉（漏字）", head, det_h, bad_h),
+                                 ("結尾吃到下一句", tail, det_t, bad_t)):
+        print(f"{name:26} {det/n*100:>8.0f}% {bad/n*100:>8.0f}%"
+              f" {statistics.median(vals):>9.3f} "
               f"{_pct(vals, 90):>8.3f} {max(vals):>8.3f}")
-    print(f"\n任一端超標：{bad_any} 句 ({bad_any/n*100:.0f}%)")
+    print(f"\n任一端超過 {BAD_THRESHOLD}s：{bad_any} 句 ({bad_any/n*100:.0f}%)")
     print()
     print("── 已知限制（解讀數字前必讀）" + "─" * 30)
     print("1. 這份數字是下限，不是實際狀況。取樣條件是「有 json3 逐字時間戳」，而這種")
