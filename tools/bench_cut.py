@@ -156,9 +156,11 @@ def measure(vid, media_dir=MEDIA_DIR):
             skipped += 1
             continue
         i_first, i_last = found
-        if i_last + 1 >= len(words):
-            continue                       # 影片最後一句：沒有「下一個字」可比
+        if i_last + 1 >= len(words) or i_first == 0:
+            continue                       # 頭尾兩端需要前後各一個字才能比對
         first_start = words[i_first][1]    # 實測值：句首第一個字開始發音的時間
+        last_start = words[i_last][1]      # 實測值：句尾最後一個字開始發音的時間
+        prev_start = words[i_first - 1][1]  # 實測值：前一句最後一個字開始發音的時間
         next_start = words[i_last + 1][1]  # 實測值：下一句第一個字開始發音的時間
 
         # 重現「沒有 json3」時的完整切檔路徑：內插估計 → 停頓對齊 → 頭尾餘裕
@@ -170,12 +172,16 @@ def measure(vid, media_dir=MEDIA_DIR):
         rows.append({
             "video": vid,
             "text": s["text"],
-            "first_word_start": round(first_start, 3),
-            "next_sentence_start": round(next_start, 3),
             "cut_start": round(cut_start, 3),
             "cut_end": round(cut_end, 3),
-            # 切點晚於句首第一個字 → 開頭一定被切掉了（0 表示沒有這個問題）
+            # ── 會讓句子殘缺的失誤（嚴重：聽到的內容跟卡片文字對不起來）──
+            # 切點晚於句首第一個字 → 開頭一定被切掉了
             "head_missing": round(max(0.0, cut_start - first_start), 3),
+            # 收點早於句尾最後一個字的起音 → 最後一個字根本沒被收進來
+            "tail_truncated": round(max(0.0, last_start - cut_end), 3),
+            # ── 只是多出無關聲音的失誤（輕微：聽者證實多一兩個字不影響）──
+            # 切點早於前一句最後一個字的起音 → 一定含進了前一句的字
+            "head_early": round(max(0.0, prev_start - cut_start), 3),
             # 收點晚於下一句第一個字 → 一定吃到下一句了
             "tail_bleed": round(max(0.0, cut_end - next_start), 3),
             "snapped": snap_start != est_start or snap_end != est_end,
@@ -195,38 +201,47 @@ def report(rows, skipped):
     if not rows:
         print("沒有可用的比對樣本。")
         return
-    head = [r["head_missing"] for r in rows]
-    tail = [r["tail_bleed"] for r in rows]
     n = len(rows)
-
     cand = n + skipped
     print(f"樣本數：{n} 句，來自 {len({r['video'] for r in rows})} 支影片")
     print(f"採用率：{n}/{cand} ({n/cand*100:.0f}%)　"
           f"其餘 {skipped} 句因字詞對不上或整句在片中重複出現、無法確定標準答案而排除")
     print(f"實際套用停頓對齊的比例：{sum(r['snapped'] for r in rows) / n * 100:.0f}%")
     print()
-    bad_h = sum(1 for v in head if v > BAD_THRESHOLD)
-    bad_t = sum(1 for v in tail if v > BAD_THRESHOLD)
-    bad_any = sum(1 for r in rows
-                  if r["head_missing"] > BAD_THRESHOLD or r["tail_bleed"] > BAD_THRESHOLD)
 
-    det_h = sum(1 for v in head if v > DETECTABLE_THRESHOLD)
-    det_t = sum(1 for v in tail if v > DETECTABLE_THRESHOLD)
+    # 分成兩類呈現：句子殘缺（聽到的跟卡片文字對不起來）與多出無關聲音。
+    # 盲測顯示後者多一兩個字聽者並不在意，兩者不該混在同一個總分裡看。
+    severe = (("開頭被切掉（漏字）", "head_missing"),
+              ("結尾少收最後一個字", "tail_truncated"))
+    mild = (("開頭含到前一句", "head_early"),
+            ("結尾吃到下一句", "tail_bleed"))
 
-    print("兩個無法辯駁的失誤（都只用 json3 實測的「字開始時間」計算）")
+    def block(title, specs):
+        print(title)
+        print(f"{'':26} {'>%.2fs' % DETECTABLE_THRESHOLD:>9}"
+              f" {'>%.2fs' % BAD_THRESHOLD:>9} {'中位數':>9} {'p90':>8} {'最大':>8}")
+        print(f"{'':26} {'(聽得出)':>9} {'(明顯)':>9}")
+        for name, key in specs:
+            vals = [r[key] for r in rows]
+            det = sum(1 for v in vals if v > DETECTABLE_THRESHOLD)
+            bad = sum(1 for v in vals if v > BAD_THRESHOLD)
+            # 中位數/p90/最大都取全體樣本，不切換母體，避免出現「中位數大於 p90」
+            # 這種看起來矛盾的並排
+            print(f"{name:26} {det/n*100:>8.0f}% {bad/n*100:>8.0f}%"
+                  f" {statistics.median(vals):>9.3f} "
+                  f"{_pct(vals, 90):>8.3f} {max(vals):>8.3f}")
+        print()
+
     print(f"門檻由 34 題人耳盲測定出：{DETECTABLE_THRESHOLD}s 起聽得出來、"
-          f"{BAD_THRESHOLD}s 以上會明顯干擾（主要指標）。\n")
-    # 中位數/p90/最大都取全體樣本，不切換母體，避免出現「中位數大於 p90」這種
-    # 看起來矛盾的並排（那是把超標子集的中位數跟全體的 p90 放在一起造成的）
-    print(f"{'':26} {'>%.2fs' % DETECTABLE_THRESHOLD:>9} {'>%.2fs' % BAD_THRESHOLD:>9}"
-          f" {'中位數':>9} {'p90':>8} {'最大':>8}")
-    print(f"{'':26} {'(聽得出)':>9} {'(明顯)':>9}")
-    for name, vals, det, bad in (("開頭被切掉（漏字）", head, det_h, bad_h),
-                                 ("結尾吃到下一句", tail, det_t, bad_t)):
-        print(f"{name:26} {det/n*100:>8.0f}% {bad/n*100:>8.0f}%"
-              f" {statistics.median(vals):>9.3f} "
-              f"{_pct(vals, 90):>8.3f} {max(vals):>8.3f}")
-    print(f"\n任一端超過 {BAD_THRESHOLD}s：{bad_any} 句 ({bad_any/n*100:.0f}%)")
+          f"{BAD_THRESHOLD}s 以上會明顯干擾（主要指標）。")
+    print("所有指標都只用 json3 實測的「字開始時間」計算。\n")
+    block("【嚴重】句子殘缺——聽到的內容跟卡片文字對不起來", severe)
+    block("【輕微】多出無關聲音——盲測證實多一兩個字不影響學習", mild)
+
+    sev_any = sum(1 for r in rows
+                  if r["head_missing"] > BAD_THRESHOLD
+                  or r["tail_truncated"] > BAD_THRESHOLD)
+    print(f"任一種「句子殘缺」超過 {BAD_THRESHOLD}s：{sev_any} 句 ({sev_any/n*100:.0f}%)")
     print()
     print("── 已知限制（解讀數字前必讀）" + "─" * 30)
     print("1. 這份數字是下限，不是實際狀況。取樣條件是「有 json3 逐字時間戳」，而這種")
@@ -265,11 +280,14 @@ def main():
     report(rows, skipped)
 
     if args.worst and rows:
-        print(f"\n失誤最大的 {args.worst} 句：")
-        worst = sorted(rows, key=lambda r: -max(r["head_missing"], r["tail_bleed"]))
+        # 只列「句子殘缺」類的最糟案例——多出無關聲音的那類盲測證實不影響學習，
+        # 排在前面只會擠掉真正需要看的案例
+        print(f"\n句子殘缺最嚴重的 {args.worst} 句：")
+        worst = sorted(rows,
+                       key=lambda r: -max(r["head_missing"], r["tail_truncated"]))
         for r in worst[: args.worst]:
-            print(f"  漏頭{r['head_missing']:.2f}s 超尾{r['tail_bleed']:.2f}s  "
-                  f"{r['video']}  {r['text'][:52]}")
+            print(f"  漏頭{r['head_missing']:.2f}s 少收尾{r['tail_truncated']:.2f}s  "
+                  f"{r['video']}  {r['text'][:50]}")
 
     if args.json:
         json.dump(rows, open(args.json, "w", encoding="utf-8"),
