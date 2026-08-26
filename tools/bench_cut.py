@@ -8,9 +8,15 @@
 
 指標只用「字的開始時間」這個 json3 真正記錄的數值，不碰字的結束時間——
 parse_json3 的字尾是用 min(下一個字的開始, 起點+MAX_WORD_DUR) 合成的，不是實測
-的聲音結束點，拿它當標準答案會讓終點誤差失真。因此這裡量的是兩個「無法辯駁」的
-失誤：切點晚於句首第一個字（開頭一定漏掉了）、以及切點晚於下一句第一個字
-（一定吃到下一句了）。
+的聲音結束點，拿它當標準答案會讓誤差失真。因此量的是四個「無法辯駁」的失誤，
+依對學習的影響分兩類：
+
+  嚴重（句子殘缺，聽到的跟卡片文字對不起來）
+    head_missing    切點晚於句首第一個字   → 開頭一定漏掉了
+    tail_truncated  收點早於句尾最後一個字 → 最後一個字根本沒收進來
+  輕微（只是多出無關聲音，盲測證實多一兩個字不影響）
+    head_early      切點早於前一句最後一個字 → 一定含進了前一句
+    tail_bleed      收點晚於下一句第一個字   → 一定吃到下一句了
 
 務必先讀「已知限制」一節再解讀數字。
 
@@ -66,8 +72,14 @@ BENCH_MAX_WORDS = 22
 # 所以真正的轉折點在 1.1 秒，那才是「會干擾複習」的量級；0.3 秒則是可察覺的
 # 下限（0.3 秒以上幾乎不再被聽成乾淨）。原本憑「一個英文單字約 0.25 秒」設的
 # 門檻把大量「聽得出來但不影響」的句子算成瑕疵，高估了問題規模。
-DETECTABLE_THRESHOLD = 0.30   # 聽得出來，但多數人覺得不影響
-BAD_THRESHOLD = 1.10          # 主要指標：會明顯干擾複習
+#
+# 重要的適用範圍限制：盲測問的是「結尾有沒有聽到下一句」，所以這兩個門檻**只有
+# tail_bleed 一項是直接驗證過的**。套用到另外三項（head_missing、tail_truncated、
+# head_early）是類比推論，沒有實測依據——而且合理懷疑並不通用：漏掉句首會讓聽到的
+# 內容跟卡片文字對不起來，容忍度很可能遠低於結尾多出幾個字。要把那三項的門檻也
+# 釘死，得另外針對它們各做一次盲測。
+DETECTABLE_THRESHOLD = 0.30   # 聽得出來，但多數人覺得不影響（僅 tail_bleed 實測）
+BAD_THRESHOLD = 1.10          # 主要指標：會明顯干擾複習（僅 tail_bleed 實測）
 
 
 def unique_truth(words, sentence, hint_start, search=15.0,
@@ -147,17 +159,21 @@ def measure(vid, media_dir=MEDIA_DIR):
     words = parse_json3(f"{media_dir}/{vid}.en.json3")
     sents = build_sentences(parse_srt(srt))
 
-    rows, skipped = [], 0
+    # 分開記各種被排除的原因，report() 才能誠實交代取樣經過多少層篩選
+    rows = []
+    skip = {"長度不符": 0, "無法確定答案": 0, "位於影片頭尾": 0}
     for s in sents:
         if not (BENCH_MIN_WORDS <= s["nwords"] <= BENCH_MAX_WORDS):
+            skip["長度不符"] += 1
             continue
         found = unique_truth(words, s["text"], s["start"])
         if not found:
-            skipped += 1
+            skip["無法確定答案"] += 1
             continue
         i_first, i_last = found
         if i_last + 1 >= len(words) or i_first == 0:
-            continue                       # 頭尾兩端需要前後各一個字才能比對
+            skip["位於影片頭尾"] += 1      # 頭尾兩端需要前後各一個字才能比對
+            continue
         first_start = words[i_first][1]    # 實測值：句首第一個字開始發音的時間
         last_start = words[i_last][1]      # 實測值：句尾最後一個字開始發音的時間
         prev_start = words[i_first - 1][1]  # 實測值：前一句最後一個字開始發音的時間
@@ -186,7 +202,7 @@ def measure(vid, media_dir=MEDIA_DIR):
             "tail_bleed": round(max(0.0, cut_end - next_start), 3),
             "snapped": snap_start != est_start or snap_end != est_end,
         })
-    return rows, skipped
+    return rows, skip
 
 
 def _pct(vals, p):
@@ -197,15 +213,18 @@ def _pct(vals, p):
     return vals[k]
 
 
-def report(rows, skipped):
+def report(rows, skip):
     if not rows:
         print("沒有可用的比對樣本。")
         return
     n = len(rows)
-    cand = n + skipped
+    total = n + sum(skip.values())
     print(f"樣本數：{n} 句，來自 {len({r['video'] for r in rows})} 支影片")
-    print(f"採用率：{n}/{cand} ({n/cand*100:.0f}%)　"
-          f"其餘 {skipped} 句因字詞對不上或整句在片中重複出現、無法確定標準答案而排除")
+    print(f"採用率：{n}/{total} ({n/total*100:.0f}%)　字幕全部句子經三層篩選後的結果：")
+    print(f"  排除 {skip['長度不符']} 句（字數不在 {BENCH_MIN_WORDS}~{BENCH_MAX_WORDS}，"
+          f"本來就不會變成卡片）")
+    print(f"  排除 {skip['無法確定答案']} 句（字詞對不上，或整句在片中重複出現無法定位）")
+    print(f"  排除 {skip['位於影片頭尾']} 句（位於影片頭尾，缺前後文可比）")
     print(f"實際套用停頓對齊的比例：{sum(r['snapped'] for r in rows) / n * 100:.0f}%")
     print()
 
@@ -232,8 +251,8 @@ def report(rows, skipped):
                   f"{_pct(vals, 90):>8.3f} {max(vals):>8.3f}")
         print()
 
-    print(f"門檻由 34 題人耳盲測定出：{DETECTABLE_THRESHOLD}s 起聽得出來、"
-          f"{BAD_THRESHOLD}s 以上會明顯干擾（主要指標）。")
+    print(f"門檻由 34 題人耳盲測定出：超過 {DETECTABLE_THRESHOLD}s 聽得出來、"
+          f"超過 {BAD_THRESHOLD}s 會明顯干擾（主要指標）。")
     print("所有指標都只用 json3 實測的「字開始時間」計算。\n")
     block("【嚴重】句子殘缺——聽到的內容跟卡片文字對不起來", severe)
     block("【輕微】多出無關聲音——盲測證實多一兩個字不影響學習", mild)
@@ -250,16 +269,20 @@ def report(rows, skipped):
     print("   結構上量不到（見 issue #1）。")
     print("2. 標準答案要在 SRT 估計值前後 15 秒內找得到才算數，偏移超過這個範圍的句子")
     print("   會被排除而不是被計入——正好排除了最嚴重的失敗案例，同樣使數字偏樂觀。")
-    print("3. 只計算「一定出錯」的量：切點晚於句首第一個字、或收點晚於下一句第一個字。")
-    print("   落在中間的偏移（例如結尾多含了一段靜音）不算進來，因為 json3 沒有記錄")
-    print("   字什麼時候結束，無法判定。")
+    print("3. 四個指標都只計算「一定出錯」的量（切點越過前後某個字的起音時間）。")
+    print("   落在中間的偏移不算進來——例如結尾多含了一段靜音、或最後一個字只被切掉")
+    print("   一半，因為 json3 沒有記錄字什麼時候結束，無法判定。所以是保守下限。")
     print("4. 被排除的句子不是隨機的：整句在片中重複出現的（多半較短、較口語）、以及")
     print("   字幕用字與自動聽打不一致的（常見於人工潤過的字幕）會被系統性排除，")
     print("   代表這份樣本略偏向「用字獨特、字幕與語音一致」的句子。")
-    print("5. 語料與目標族群在「cue 是否重疊」上結構相反，改善幅度不能直接外推：")
+    print("5. 兩個門檻只有 tail_bleed 一項做過人耳盲測；套用到其餘三項是類比推論，")
+    print("   沒有實測依據。漏掉句首會讓內容跟卡片文字對不起來，容忍度很可能低得多，")
+    print("   那三項的「超標比例」應視為未經驗證的參考值。")
+    print("6. 語料與目標族群在「cue 是否重疊」上結構相反：")
     print("   本工具用的自動字幕影片 cue 重疊率近 100%（滾動字幕），而真正只能靠")
     print("   內插的人工字幕影片重疊率是 0%。針對重疊所做的修正在這裡效果顯著，")
-    print("   對人工字幕影片卻完全不生效。")
+    print("   對人工字幕影片卻完全不生效——本工具無法估計任何改動在人工字幕上的")
+    print("   效果方向或幅度，不是「不能直接外推」而是「量不到」。")
     print("   另外這些影片在正常流程中有 99% 的句子會被 json3 覆寫、根本走不到內插，")
     print("   所以這裡量到的改善只反映「json3 失效時」的表現，不等於日常製卡的改善。")
 
@@ -275,15 +298,16 @@ def main():
     if not vids:
         sys.exit("找不到素材齊全的影片（需要 SRT + 含逐字時間戳的 json3 + mp4）。")
 
-    rows, skipped = [], 0
+    rows, skip = [], {}
     for i, vid in enumerate(vids, 1):
         print(f"[{i}/{len(vids)}] {vid} ...", flush=True)
         r, sk = measure(vid)
         rows.extend(r)
-        skipped += sk
+        for k, v in sk.items():
+            skip[k] = skip.get(k, 0) + v
 
     print("\n" + "=" * 62)
-    report(rows, skipped)
+    report(rows, skip)
 
     if args.worst and rows:
         # 只列「句子殘缺」類的最糟案例——多出無關聲音的那類盲測證實不影響學習，

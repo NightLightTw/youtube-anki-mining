@@ -119,9 +119,10 @@ def test_overlapping_cues_use_next_cue_start_as_span():
     ]
     sents = build_sentences(cues)
     assert sents[1]["text"].startswith("ccc")
-    # 實際跨度 2 秒、四個字 → "ccc" 是第 3 個字，起點應在 1.0 秒附近。
-    # 若誤用標稱的 6 秒跨度，會算成 3.0 秒（晚兩秒，正是這個 bug 的症狀）。
-    assert 0.9 <= sents[1]["start"] <= 1.1
+    # 實際跨度 2 秒、四個字 → "ccc" 是第 3 個字，起點正好 2*2/4 = 1.0 秒。
+    # 這是純算術、沒有音訊處理誤差，所以用精確值斷言。
+    # 若誤用標稱的 6 秒跨度會算成 3.0 秒（晚兩秒，正是這個 bug 的症狀）。
+    assert sents[1]["start"] == pytest.approx(1.0)
 
 
 def test_non_overlapping_cues_behaviour_unchanged():
@@ -132,8 +133,8 @@ def test_non_overlapping_cues_behaviour_unchanged():
     ]
     sents = build_sentences(cues)
     assert sents[1]["text"].startswith("ccc")
-    # 跨度仍是完整的 4 秒、四個字各 1 秒 → "ccc" 起點 2.0 秒，不受修正影響
-    assert 1.9 <= sents[1]["start"] <= 2.1
+    # 跨度仍是完整的 4 秒、四個字各 1 秒 → "ccc" 起點正好 2.0 秒，不受修正影響
+    assert sents[1]["start"] == pytest.approx(2.0)
 
 
 def test_build_sentences_handles_no_trailing_punctuation():
