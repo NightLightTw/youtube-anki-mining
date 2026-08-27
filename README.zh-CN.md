@@ -284,8 +284,25 @@ cd /path/to/youtube-anki-mining
 3. **字典收录有缺口** — Merriam-Webster 学习者字典查不到部分现代口语/惯用义（如 *dupe*=仿冒品、*chill*=放松的），英式拼法需备援转换，少数字完全没有词条。
 4. **繁中释义偶尔对不上英文定义** — Google 翻译即使有英文定义当语境提示，仍可能给出字面直翻或语域错误的翻译。
 5. **自动字幕品质限制** — 口吃断词、连字号黏字、拼写数字已有过滤器挡掉常见型态，但无法穷举；完全没有标点的自动字幕无法断句，目前不支持。
+6. **人工字幕视频的音档切点可能不准** — 见下一节。
 
 实务缓解：建卡后在 Anki 扫一遍，删掉或修正不对的卡。系统性解法见下方 Roadmap 的 LLM 辅助方向。
+
+### 音档可能漏掉句首的几个字
+
+如果某张卡的音档听起来像从半句开始，多半是这个原因。
+
+管线要知道「这句话在视频的第几秒到第几秒」才能切音档。YouTube 自动听打的字幕会附每个字的精确时间，直接用就很准；但**频道自己上传的人工字幕没有逐字时间**，只能拿整段字幕的时间去推算。上字幕的人若习惯性地晚标几格，整支视频的切点就跟着偏，音档开头就会少掉一两个字。
+
+实测四支 BBC podcast，句首偏移的中位数从 −0.12 秒（安全）到 +0.24 秒（会漏字）都有，**同一个频道的不同节目差异就很大**。自动字幕视频几乎不受影响。
+
+遇到时可以：
+
+- **换一句**——同一个字通常在视频里出现不只一次，用 `--list` 找别的索引重做
+- **用手动模式微调**——`mine.py --index N --word WORD` 自己挑句子
+- 如果偏移**很大**（几秒等级，整份字幕明显错位），可以先用 [ffsubsync](https://github.com/smacke/ffsubsync) 之类的字幕同步工具修好 SRT 再制卡。但要注意它是为「秒」等级的错位设计的，实测对本项目这种零点几秒的偏移**反而会改坏**，不要拿来处理细微偏移
+
+> 这个现象调查过一轮，结论是目前没有划算的自动解法：现成的字幕同步工具分辨率不够，强制对齐类的工具（torchaudio、WhisperX、NeMo）准确但都要装 PyTorch。细节与量测数据见 [issue #1](https://github.com/NightLightTw/youtube-anki-mining/issues/1)；`tools/asr_timing.py` 是给高级用户的选用工具（需自备 whisper 环境）。
 
 ---
 
@@ -341,6 +358,8 @@ Python 管线 (yt-dlp + ffmpeg) → AnkiConnect(:8765) → Anki 桌面 → AnkiW
 | `make_apkg.py` | 产出 `YT_Mining_EN.apkg`（note type 备援） |
 | `add_cors.py` | 把浏览器扩充 origin 加进 AnkiConnect CORS 白名单（asbplayer 路线用） |
 | `tests/` | pytest 回归测试：案例来自实际处理视频时修过的坑（挑字过滤、词形覆写、拼法备援、字幕句子重建），CI 每次提交都会跑 |
+| `tools/bench_cut.py` | 量测音档切点误差的工具（开发用）。拿有逐字时间戳的视频当标准答案，量出「只能靠推算」那条路径的误差，用来验证参数调整有没有效 |
+| `tools/asr_timing.py` | 选用：用本机语音辨识产生逐字时间戳，给人工字幕视频用。需自备 whisper 环境，一般用户不需要 |
 | `scripts/gen_readme_zh_cn.py` | 从繁体 README 自动生成简体版（OpenCC tw2sp），CI 强制两版同步 |
 | `docs/` | README 素材 |
 | `youtube-anki-mining-spec.md` | 原始设计规格 |
