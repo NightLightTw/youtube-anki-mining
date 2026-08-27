@@ -201,6 +201,14 @@ def measure(vid, media_dir=MEDIA_DIR):
             # 收點晚於下一句第一個字 → 一定吃到下一句了
             "tail_bleed": round(max(0.0, cut_end - next_start), 3),
             "snapped": snap_start != est_start or snap_end != est_end,
+            # 未經 max(0,...) 夾擠的原始參考時間。四個指標本身是「一定出錯」的
+            # 保守量，夾擠掉了負值，因此無法用來回推「若把切點前後移動 x 秒會如何」
+            # ——調參實驗需要原始值才算得對（實測直接拿夾擠後的值加位移會得到
+            # 100% 這種明顯錯誤的結果）。
+            "_first_word_start": round(first_start, 3),
+            "_last_word_start": round(last_start, 3),
+            "_prev_word_start": round(prev_start, 3),
+            "_next_word_start": round(next_start, 3),
         })
     return rows, skip
 
@@ -278,7 +286,13 @@ def report(rows, skip):
     print("5. 兩個門檻只有 tail_bleed 一項做過人耳盲測；套用到其餘三項是類比推論，")
     print("   沒有實測依據。漏掉句首會讓內容跟卡片文字對不起來，容忍度很可能低得多，")
     print("   那三項的「超標比例」應視為未經驗證的參考值。")
-    print("6. 語料與目標族群在「cue 是否重疊」上結構相反：")
+    print("6. head_missing 是幾何量，不是「真的少了字」——實測誤報率約三分之一。")
+    print("   拿 9 個判定為漏頭的案例做人耳盲測＋轉錄核對，其中 3 個（量到 0.36、")
+    print("   0.44、0.73 秒）音檔裡一個字都沒少。原因是標準答案的字起音時間本身有")
+    print("   誤差（把前面的呼吸或殘響算進字裡），誤差大小隨個別字的辨識品質浮動，")
+    print("   無法用固定修正值抵消。所以這些數字只能做「同語料、改參數前後」的相對")
+    print("   比較，不能用來估計問題的絕對規模。")
+    print("7. 語料與目標族群在「cue 是否重疊」上結構相反：")
     print("   本工具用的自動字幕影片 cue 重疊率近 100%（滾動字幕），而真正只能靠")
     print("   內插的人工字幕影片重疊率是 0%。針對重疊所做的修正在這裡效果顯著，")
     print("   對人工字幕影片卻完全不生效——本工具無法估計任何改動在人工字幕上的")
