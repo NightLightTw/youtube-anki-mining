@@ -155,7 +155,7 @@ def refine_with_json3(sents, json3_path):
         if r:
             _score, st, en = r
             if en - st >= 0.4:          # 防呆：比對到不合理的極短區間就不採用
-                s["start"], s["end"] = st, en
+                s["start"], s["end"], s["from_json3"] = st, en, True
                 n += 1
     return n
 
@@ -218,6 +218,9 @@ def _mk_sentence(words, idxs, next_i):
         "start": start,
         "end": end,
         "nwords": len(idxs),
+        # 時間目前來自 SRT 線性內插；refine_with_json3 校正成功會翻成 True。
+        # 切音檔時要靠這個決定還需不需要靜音吸附（見 extract_audio 的呼叫端）。
+        "from_json3": False,
     }
 
 
@@ -331,16 +334,20 @@ def snap_boundaries(video, start, end, window=SNAP_WINDOW):
 
 
 def extract_audio(video, start, end, out, snap=True):
-    """依 start/end 切出音檔；預設先做靜音吸附校正邊界。
+    """依 start/end 切出音檔；snap=True 時先做靜音吸附校正邊界。
+
+    不論是否吸附，都補上同樣的頭尾餘裕（SNAP_HEAD_PAD / SNAP_TAIL_PAD）。
 
     注意不要再疊加固定緩衝：早期版本在這裡另外加了「前 -0.15s、後 +0.3s」，
     與呼叫端 _mk_sentence 自帶的句尾緩衝相加，最多多切 0.6 秒而吃到下一句。
-    現在邊界改由 snap_boundaries 依真實音訊決定，只補極小的自然餘裕。
+    現在邊界由時間來源（json3 逐字時間戳或靜音吸附）決定，只補極小的自然餘裕。
     """
     if snap:
         start, end = snap_boundaries(video, start, end)
-        start = max(0.0, start - SNAP_HEAD_PAD)
-        end = end + SNAP_TAIL_PAD
+    # 餘裕不綁在吸附分支裡：這兩件事互相獨立，早期版本綁在一起，導致「不吸附」
+    # 的路徑連帶失去頭尾餘裕，句首起音和句尾殘響會被切得很乾。
+    start = max(0.0, start - SNAP_HEAD_PAD)
+    end = end + SNAP_TAIL_PAD
     dur = max(0.5, end - start)
     # -af aresample=async=1：少數來源（實測 T9LkN-79rfI）的 AAC 解碼幀會讓 libmp3lame
     # 報 "inadequate AVFrame plane padding" 而整個轉檔失敗；插一層重採樣強制重整幀
@@ -754,7 +761,7 @@ def highlight(sentence, word):
 
 
 def add_card(video_id, video_file, sent, word, title, collocation="", highlight_word=None,
-             save_image=False):
+             save_image=False, legacy_snap=False):
     start = sent["start"]
     mid = (sent["start"] + sent["end"]) / 2
     # slug 全小寫（避免 Anki 媒體層大小寫正規化讓 iPhone 斷圖斷音）；
@@ -770,7 +777,18 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
         print(f"  ↷ 跳過（已存在）：{word}")
         return None
 
-    extract_audio(video_file, sent["start"], sent["end"], f"{MEDIA_DIR}/{audio_fn}")
+    # 句子時間來自 json3 逐字時間戳時跳過靜音吸附。實測在那批樣本上，吸附把已經
+    # 夠準的邊界又推移了 0.35~0.75 秒（正好是一到三個字），反而切掉句首或多帶進
+    # 隔壁句：42 張 ASR 比對「句子不完整」10→5，其中 10 張的人耳盲測 4→0。
+    # 推測是 SNAP_WINDOW 有 1.2 秒，在連續語流裡吸到了句子「內部」的停頓——但這
+    # 只是假說，沒有標註被選中的靜音點落在句內還是句間。
+    # 證據的侷限：樣本是 3 支同類型（對話式教學）影片，語速快、句間停頓短，正好
+    # 是吸附最容易誤判的情境；量測工具本身在 ±180ms 內不可信，所以無法斷定小幅
+    # 差異。其他語速或錄音條件沒有驗證過——覺得不對可以用 --legacy-snap 退回。
+    # 沒有 json3 的影片（人工字幕）時間只能靠 SRT 線性內插，誤差大得多，吸附是
+    # 管線目前僅有的校正手段，維持原本行為。詳見 repo issue #5。
+    extract_audio(video_file, sent["start"], sent["end"], f"{MEDIA_DIR}/{audio_fn}",
+                  snap=legacy_snap or not sent.get("from_json3", False))
     normalize_audio(f"{MEDIA_DIR}/{audio_fn}")
     store(f"{MEDIA_DIR}/{audio_fn}", audio_fn)
     if save_image:
@@ -834,6 +852,10 @@ def main():
     ap.add_argument("--min-zipf", type=float, default=2.5)
     ap.add_argument("--max-zipf", type=float, default=4.2)
     ap.add_argument("--dry-run", action="store_true", help="只列出自動挑的字，不建卡")
+    ap.add_argument("--legacy-snap", action="store_true",
+                    help="對有 json3 逐字時間戳的句子也做靜音吸附（改動前的行為）。"
+                         "新的預設是跳過吸附，實測切點較準；這個旗標是退路，"
+                         "用於那批樣本沒涵蓋到的素材（見 issue #5）")
     ap.add_argument("--with-image", action="store_true",
                     help="擷取/儲存影片截圖；預設不留存（Image 欄位留空），需要才加這個旗標")
     args = ap.parse_args()
@@ -909,7 +931,8 @@ def main():
             try:
                 nid = add_card(args.video_id, video, c["sent"], c["lemma"],
                                args.title, highlight_word=c["surface"],
-                               save_image=args.with_image)
+                               save_image=args.with_image,
+                               legacy_snap=args.legacy_snap)
                 if nid is None:          # 重複被預檢跳過
                     skipped += 1
                 else:
@@ -926,7 +949,7 @@ def main():
         ap.error(f"--index {args.index} 超出範圍（0~{len(sents)-1}）；可先用 --list 看索引")
     sent = sents[args.index]
     add_card(args.video_id, video, sent, args.word, args.title, args.collocation,
-             save_image=args.with_image)
+             save_image=args.with_image, legacy_snap=args.legacy_snap)
 
 
 if __name__ == "__main__":

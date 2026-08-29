@@ -16,7 +16,8 @@ mine.locate_sentence() / refine_with_json3() 那套既有邏輯。
 torch 2.3.1 則正常。所以預設用獨立的直譯器路徑，不裝進專案的 .venv，避免污染
 主管線的相依（一般使用者完全不需要裝這個）。
 
-用 --whisper-python 指定可用的直譯器，或設環境變數 ASR_PYTHON。
+預設會自動尋找可用的直譯器（依序試 ASR_PYTHON 環境變數、PATH 上 whisper 指令所在
+的環境、目前的直譯器）；找不到時用 --whisper-python 指定。
 
 用法：
     python tools/asr_timing.py media/VIDEO.mp4 -o media/VIDEO.asr.json
@@ -25,16 +26,55 @@ torch 2.3.1 則正常。所以預設用獨立的直譯器路徑，不裝進專�
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-DEFAULT_PYTHON = os.environ.get(
-    "ASR_PYTHON",
-    "/opt/homebrew/Caskroom/miniforge/base/envs/whisper/bin/python",
+INSTALL_HINT = (
+    "找不到裝有 openai-whisper 的直譯器。可以：\n"
+    "  1. 在目前的環境安裝：pip install openai-whisper\n"
+    "  2. 用 --whisper-python 指定其他直譯器，或設環境變數 ASR_PYTHON\n"
+    "注意版本組合：實測 Python 3.13 + torch 2.13 跑 --word_timestamps 會 segfault\n"
+    "（OMP libomp.dylib 重複初始化），Python 3.10 + torch 2.3.1 則正常。所以建議\n"
+    "裝在獨立環境，不要混進本專案的 .venv。"
 )
+
+
+def _has_whisper(python_bin):
+    """檢查某個直譯器能不能 import whisper（跑得動才算數，不只是檔案存在）。"""
+    if not python_bin or not os.path.exists(python_bin):
+        return False
+    try:
+        return subprocess.run([python_bin, "-c", "import whisper"],
+                              capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def find_whisper_python():
+    """依序找一個能用的直譯器：ASR_PYTHON → whisper 指令所屬環境 → 目前直譯器。
+
+    刻意不寫死任何路徑——whisper 通常裝在使用者自己的 conda/venv 裡，位置因人而異。
+    """
+    env = os.environ.get("ASR_PYTHON")
+    if env:
+        return env          # 使用者明講的優先，能不能用留給 transcribe() 報錯
+    exe = shutil.which("whisper")
+    if exe:
+        # 一般的 venv/conda 安裝裡，whisper 執行檔與其直譯器同在一個 bin/ 底下。
+        # 這個推斷對 pipx/uv 的啟動 shim 不成立（shim 不在環境的 bin/ 裡），那些
+        # 情況會落到下面的 sys.executable，再不行就請使用者用 ASR_PYTHON 指定。
+        d = os.path.dirname(exe)
+        for name in ("python", "python3", "python.exe"):     # Windows 是 python.exe
+            cand = os.path.join(d, name)
+            if _has_whisper(cand):
+                return cand
+    if _has_whisper(sys.executable):
+        return sys.executable
+    return None
 
 # whisper 逐字時間戳跑在需要 OpenMP 的路徑上，macOS 常同時載入多份 libomp。
 # 這個變數讓它容忍重複載入；不設的話部分環境會直接中止。
@@ -49,15 +89,13 @@ def extract_wav(media_path, out_wav):
     )
 
 
-def transcribe(wav_path, model="base", python_bin=DEFAULT_PYTHON, language="en"):
+def transcribe(wav_path, model="base", python_bin=None, language="en"):
     """跑 whisper 並回傳解析後的結果 dict。"""
+    python_bin = python_bin or find_whisper_python()
+    if not python_bin:
+        sys.exit(INSTALL_HINT)
     if not os.path.exists(python_bin):
-        sys.exit(
-            f"找不到可用的 whisper 直譯器：{python_bin}\n"
-            "請用 --whisper-python 指定，或設環境變數 ASR_PYTHON。\n"
-            "注意 Python 3.13 + torch 2.13 跑 --word_timestamps 會 segfault，"
-            "需要較舊的組合（實測 Python 3.10 + torch 2.3.1 正常）。"
-        )
+        sys.exit(f"指定的直譯器不存在：{python_bin}\n\n{INSTALL_HINT}")
     with tempfile.TemporaryDirectory() as td:
         cmd = [
             python_bin, "-m", "whisper", wav_path,
@@ -97,8 +135,9 @@ def main():
     ap.add_argument("--model", default="base",
                     help="whisper 模型；base 約 14 秒/分鐘音訊，small 約 41 秒/分鐘")
     ap.add_argument("--language", default="en")
-    ap.add_argument("--whisper-python", default=DEFAULT_PYTHON,
-                    help="裝有 openai-whisper 的直譯器路徑")
+    ap.add_argument("--whisper-python", default=None,
+                    help="裝有 openai-whisper 的直譯器路徑（預設自動尋找；"
+                         "也可用環境變數 ASR_PYTHON 指定）")
     args = ap.parse_args()
 
     out = args.out or (args.media.rsplit(".", 1)[0] + ".asr.json")

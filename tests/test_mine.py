@@ -1,4 +1,5 @@
 """mine.py 純函式（字幕解析、句子重建、拼法備援）與 CLI 參數驗證的回歸測試。"""
+import json
 import sys
 
 import pytest
@@ -143,3 +144,132 @@ def test_build_sentences_handles_no_trailing_punctuation():
     sents = build_sentences(cues)
     assert len(sents) == 1
     assert sents[0]["text"] == "An unfinished thought"
+
+
+# ---------- 時間來源標記與靜音吸附的取捨 ----------
+#
+# 背景：句子時間有兩個來源，json3 逐字時間戳（準）與 SRT 線性內插（誤差可達數秒）。
+# 靜音吸附是為了補救後者，但實測它會把已經夠準的 json3 邊界再推移 0.35~0.75 秒，
+# 反而切掉句首或多帶進隔壁句。所以要能逐句分辨時間是哪裡來的。
+
+def test_sentences_start_marked_as_not_from_json3():
+    sents = build_sentences([(0.0, 2.0, "Hello world.")])
+    assert sents[0]["from_json3"] is False
+
+
+def _write_json3(tmp_path, words):
+    """words: [(字, 起始秒)]，寫成 json3 的逐字格式。"""
+    events = [{"tStartMs": int(s * 1000), "segs": [{"utf8": w, "tOffsetMs": 0}]}
+              for w, s in words]
+    p = tmp_path / "v.en.json3"
+    p.write_text(json.dumps({"events": events}), encoding="utf-8")
+    return str(p)
+
+
+def test_refine_with_json3_marks_only_the_sentences_it_matched(tmp_path):
+    """對得上的句子換成 json3 時間並標記，對不上的維持內插時間且不標記。"""
+    cues = [(0.0, 3.0, "Alpha bravo charlie delta."), (3.0, 6.0, "Zulu yankee xray whiskey.")]
+    sents = build_sentences(cues)
+    # json3 只涵蓋第一句，且時間與內插值明顯不同
+    j3 = _write_json3(tmp_path, [("Alpha", 10.0), ("bravo", 10.5), ("charlie", 11.0),
+                                 ("delta.", 11.5)])
+    n = mine.refine_with_json3(sents, j3)
+
+    assert n == 1
+    assert sents[0]["from_json3"] is True
+    assert sents[0]["start"] == pytest.approx(10.0)
+    assert sents[1]["from_json3"] is False          # 沒對到就不能標記
+    assert sents[1]["start"] < 10.0                 # 時間也不該被動到
+
+
+def test_refine_with_json3_missing_file_marks_nothing(tmp_path):
+    sents = build_sentences([(0.0, 3.0, "Alpha bravo charlie delta.")])
+    assert mine.refine_with_json3(sents, str(tmp_path / "nope.json3")) == 0
+    assert sents[0]["from_json3"] is False
+
+
+def test_extract_audio_pads_even_when_not_snapping(monkeypatch):
+    """頭尾餘裕不能綁在吸附分支裡。
+
+    這兩件事互相獨立：跳過吸附是因為 json3 的邊界已經夠準，不是因為不需要餘裕。
+    早期版本把 pad 寫在 `if snap:` 裡面，跳過吸附就連帶失去餘裕，句首起音會被切掉。
+    """
+    calls = []
+    monkeypatch.setattr(mine, "run", lambda cmd: calls.append(cmd))
+    monkeypatch.setattr(mine, "snap_boundaries",
+                        lambda *a, **k: pytest.fail("snap=False 不該呼叫吸附"))
+
+    mine.extract_audio("v.mp4", 10.0, 12.0, "out.mp3", snap=False)
+
+    cmd = calls[0]
+    ss = float(cmd[cmd.index("-ss") + 1])
+    dur = float(cmd[cmd.index("-t") + 1])
+    assert ss == pytest.approx(10.0 - mine.SNAP_HEAD_PAD)
+    assert dur == pytest.approx(2.0 + mine.SNAP_HEAD_PAD + mine.SNAP_TAIL_PAD)
+
+
+def test_extract_audio_snaps_then_pads(monkeypatch):
+    """snap=True 時先吸附、再對吸附後的邊界加同樣的餘裕。"""
+    calls = []
+    monkeypatch.setattr(mine, "run", lambda cmd: calls.append(cmd))
+    monkeypatch.setattr(mine, "snap_boundaries", lambda v, s, e, **k: (20.0, 23.0))
+
+    mine.extract_audio("v.mp4", 10.0, 12.0, "out.mp3", snap=True)
+
+    cmd = calls[0]
+    ss = float(cmd[cmd.index("-ss") + 1])
+    dur = float(cmd[cmd.index("-t") + 1])
+    assert ss == pytest.approx(20.0 - mine.SNAP_HEAD_PAD)
+    assert dur == pytest.approx(3.0 + mine.SNAP_HEAD_PAD + mine.SNAP_TAIL_PAD)
+
+
+def test_extract_audio_start_never_negative(monkeypatch):
+    """句子從影片最開頭起算時，扣掉餘裕不能變成負數（ffmpeg -ss 會失敗）。"""
+    calls = []
+    monkeypatch.setattr(mine, "run", lambda cmd: calls.append(cmd))
+    mine.extract_audio("v.mp4", 0.0, 2.0, "out.mp3", snap=False)
+    assert float(calls[0][calls[0].index("-ss") + 1]) == pytest.approx(0.0)
+
+
+def test_legacy_snap_forces_snapping_even_with_json3(monkeypatch, tmp_path):
+    """--legacy-snap 是退路：樣本沒涵蓋到的素材若切壞了，要能退回舊行為。
+
+    直接驗證 add_card 傳給 extract_audio 的 snap 參數，不碰 AnkiConnect。
+    """
+    seen = {}
+    monkeypatch.setattr(mine, "invoke", lambda action, **kw: [True])
+    monkeypatch.setattr(mine, "extract_audio",
+                        lambda v, s, e, o, snap=True: seen.setdefault("snap", snap))
+    monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
+    monkeypatch.setattr(mine, "store", lambda p, f: None)
+    monkeypatch.setattr(mine, "fetch_definition", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_synonyms", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_chinese", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "MEDIA_DIR", str(tmp_path))
+
+    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
+    for legacy, expected in ((False, False), (True, True)):
+        seen.clear()
+        monkeypatch.setattr(mine, "invoke",
+                            lambda action, **kw: [True] if action == "canAddNotes" else 1)
+        mine.add_card("vid", "v.mp4", sent, "alpha", "t", legacy_snap=legacy)
+        assert seen["snap"] is expected
+
+
+def test_sentence_without_json3_still_snaps(monkeypatch, tmp_path):
+    """沒有逐字時間戳（人工字幕）的句子維持吸附——那條路徑的行為不該被這次改動影響。"""
+    seen = {}
+    monkeypatch.setattr(mine, "invoke",
+                        lambda action, **kw: [True] if action == "canAddNotes" else 1)
+    monkeypatch.setattr(mine, "extract_audio",
+                        lambda v, s, e, o, snap=True: seen.setdefault("snap", snap))
+    monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
+    monkeypatch.setattr(mine, "store", lambda p, f: None)
+    monkeypatch.setattr(mine, "fetch_definition", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_synonyms", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_chinese", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "MEDIA_DIR", str(tmp_path))
+
+    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": False}
+    mine.add_card("vid", "v.mp4", sent, "alpha", "t")
+    assert seen["snap"] is True
