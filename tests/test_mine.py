@@ -273,3 +273,84 @@ def test_sentence_without_json3_still_snaps(monkeypatch, tmp_path):
     sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": False}
     mine.add_card("vid", "v.mp4", sent, "alpha", "t")
     assert seen["snap"] is True
+
+
+# ---------- 詞義選擇沒有依據時的提示 ----------
+
+def test_sense_guess_flagged_when_nothing_overlaps():
+    """多個候選字義、但例句跟哪一個都對不上——這時挑第一個純粹是猜的。"""
+    shortdefs = ["to surround (an area) with a hedge",
+                 "to avoid giving a promise or direct answer"]
+    sent = "I'm going to hedge and say I'm not sure."
+    assert mine._sense_is_a_guess(shortdefs, sent, "hedge") is True
+
+
+def test_sense_not_flagged_when_something_overlaps():
+    """有依據就不提示，免得訊號被雜訊淹掉。"""
+    shortdefs = ["a thick, flat piece of meat and especially beef",
+                 "a thick, flat piece of fish"]
+    sent = "I ordered the fish but they brought me a steak."
+    assert mine._sense_is_a_guess(shortdefs, sent, "steak") is False
+
+
+def test_single_sense_never_flagged():
+    """只有一個字義就沒得挑，不算猜測。"""
+    assert mine._sense_is_a_guess(["the only meaning"], "A sentence here.", "x") is False
+
+
+def test_sense_guess_needs_a_sentence():
+    """手動模式可能沒有例句可比對，那時不該亂報。"""
+    assert mine._sense_is_a_guess(["one", "two"], "", "x") is False
+
+
+def test_pick_sense_and_guess_flag_stay_consistent():
+    """兩者共用同一組分數：只要有任一義項對得上，就該挑那個且不標記；
+    全部對不上則退回第一義且標記。這個一致性是提示有意義的前提。"""
+    sds = ["a thick, flat piece of meat and especially beef", "a thick, flat piece of fish"]
+    hit = "I ordered the fish but they brought me this."
+    miss = "Hold on, let me check that again."
+    assert mine._pick_sense(sds, hit, "steak") == 1
+    assert mine._sense_is_a_guess(sds, hit, "steak") is False
+    assert mine._pick_sense(sds, miss, "steak") == 0
+    assert mine._sense_is_a_guess(sds, miss, "steak") is True
+
+
+def _mw_entry(shortdefs, fl="noun", hw="widget"):
+    return [{"hwi": {"hw": hw}, "fl": fl, "shortdef": shortdefs}]
+
+
+def test_fetch_definition_records_the_word_when_it_had_to_guess(monkeypatch):
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get",
+                        lambda ref, key, w: _mw_entry(["a small gadget", "a whatsit"]))
+    mine.UNCERTAIN_SENSES.clear()
+    out = mine.fetch_definition("widget", sentence="Hold on, let me check that again.",
+                                surface="widget")
+    assert "a small gadget" in out                 # 仍然退回第一義，行為不變
+    assert mine.UNCERTAIN_SENSES == ["widget"]     # 但有記下來
+
+
+def test_fetch_definition_records_nothing_when_it_had_evidence(monkeypatch):
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get",
+                        lambda ref, key, w: _mw_entry(["a small gadget", "a kind of fish"]))
+    mine.UNCERTAIN_SENSES.clear()
+    out = mine.fetch_definition("widget", sentence="They served us fish for dinner.",
+                                surface="widget")
+    assert "fish" in out
+    assert mine.UNCERTAIN_SENSES == []
+
+
+def test_fetch_definition_records_nothing_for_single_sense(monkeypatch):
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: _mw_entry(["the only meaning"]))
+    mine.UNCERTAIN_SENSES.clear()
+    mine.fetch_definition("widget", sentence="Hold on, let me check that.", surface="widget")
+    assert mine.UNCERTAIN_SENSES == []
+
+
+def test_fetch_definition_records_nothing_without_api_key(monkeypatch):
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "")
+    mine.UNCERTAIN_SENSES.clear()
+    assert mine.fetch_definition("widget", sentence="Anything at all.") == ""
+    assert mine.UNCERTAIN_SENSES == []

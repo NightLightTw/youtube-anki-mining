@@ -622,6 +622,21 @@ def _content_lemmas(text):
     return out
 
 
+def _sense_scores(shortdefs, sentence, surface):
+    """每個候選義項與例句的內容詞重疊分數。
+
+    _pick_sense（選哪一個）與 _sense_is_a_guess（這次選擇有沒有依據）共用這裡，
+    兩邊各算一次的話，改了其中一邊就會讓提示跟實際選擇對不上。
+    回傳空 list 代表「無從比較」：只有一個義項、沒有例句、或例句沒有可比對的內容詞。
+    """
+    if len(shortdefs) <= 1 or not sentence:
+        return []
+    ctx = _content_lemmas(sentence) - _content_lemmas(surface or "")
+    if not ctx:
+        return []
+    return [len(ctx & _content_lemmas(sd)) for sd in shortdefs]
+
+
 def _pick_sense(shortdefs, sentence, surface):
     """在 shortdef 的多個定義中，用『例句 vs 各定義的內容詞重疊』選最貼合語境的那條。
 
@@ -632,17 +647,35 @@ def _pick_sense(shortdefs, sentence, surface):
     回傳最佳定義 index。重疊全為 0（訊號不足）時回傳 0＝退回第一義(舊行為)，
     保證只在有把握時改善、不會讓原本對的變錯。穩定 argmax：同分取較前者。
     """
-    if len(shortdefs) <= 1 or not sentence:
-        return 0
-    ctx = _content_lemmas(sentence) - _content_lemmas(surface or "")
-    if not ctx:
-        return 0
     best_i, best_score = 0, 0
-    for i, sd in enumerate(shortdefs):
-        score = len(ctx & _content_lemmas(sd))
+    for i, score in enumerate(_sense_scores(shortdefs, sentence, surface)):
         if score > best_score:
             best_i, best_score = i, score
     return best_i
+
+
+def _sense_is_a_guess(shortdefs, sentence, surface):
+    """這次的詞義選擇是不是「沒有依據的猜測」。
+
+    _pick_sense 靠例句與各義項的內容詞重疊挑義項；重疊全為 0 時它沒有任何依據，
+    只是退回第一義。實測這種情況相當常有挑錯：38 張人工核對過的卡裡，符合這個
+    條件的有 20 張，其中 12 張的詞義確實不對。
+
+    但它只是「值得看一眼」的訊號，不是判定：
+    - 另外 8 張是誤報，選對了也可能一個詞都沒重疊（steak、thankful 這類）
+    - 反過來也漏得掉：accent / minimize / vague 拿到了 1 分所以不會被標記，
+      實際上正是被那 1 分推向錯誤答案的（見 repo issue #3）
+    單一義項的詞條沒得挑，不算猜測。
+    """
+    scores = _sense_scores(shortdefs, sentence, surface)
+    return bool(scores) and max(scores) == 0
+
+
+# 建卡過程中累積「詞義可能挑錯」的字，--auto 跑完會列出來讓使用者知道該回頭看哪幾個。
+# 手動 --index 模式一次只做一張，逐張的那行提示就夠了，不另外彙總。
+# 用模組層變數而非回傳值，是因為 fetch_definition 埋在 add_card 深處，
+# 一路往上傳旗標要改動四層簽章，對一個純提示訊息不值得。
+UNCERTAIN_SENSES = []
 
 
 def fetch_definition(word, sentence="", surface=""):
@@ -668,6 +701,10 @@ def fetch_definition(word, sentence="", surface=""):
         if not shortdefs:
             return ""
         idx = _pick_sense(shortdefs, sentence, surface)
+        if _sense_is_a_guess(shortdefs, sentence, surface):
+            UNCERTAIN_SENSES.append(word)
+            print(f"  ⚠ 詞義可能挑錯：{word} 有 {len(shortdefs)} 個候選字義，"
+                  f"但沒有一個對得上例句，只能退回第一個")
         return f"<i>{html.escape(pos)}</i> {_mw_clean(shortdefs[idx])}"
     except Exception as ex:
         print(f"  (定義查詢失敗：{ex})")
@@ -927,6 +964,7 @@ def main():
                 print(f"  [{c['lemma']:14s} z={c['zipf']:.1f}] {c['sent']['text']}")
             return
         ok = skipped = failed = 0
+        UNCERTAIN_SENSES.clear()      # 這是單次執行的累計，不是跨次的
         for c in picks:
             try:
                 nid = add_card(args.video_id, video, c["sent"], c["lemma"],
@@ -943,6 +981,13 @@ def main():
                 print(f"✗ 失敗 {c['lemma']}：{ex}\n")
         print(f"完成：建立 {ok} 張、跳過(重複) {skipped} 張、失敗 {failed} 張"
               f"（候選 {len(picks)}）")
+        if UNCERTAIN_SENSES:
+            print(f"\n⚠ 有 {len(UNCERTAIN_SENSES)} 個詞的詞義是猜的，"
+                  f"建議回頭確認 Definition 與 Chinese 欄：")
+            print("   " + "、".join(UNCERTAIN_SENSES))
+            print("   （字典給了多個字義，但沒有一個對得上例句，只能退回第一個。"
+                  "這是提醒不是判定：在目前 38 張對話／教學影片的樣本裡，"
+                  "這類提示有 12/20 確實挑錯，另外還漏掉 3 個有分數卻選錯的）")
         return
 
     if not (0 <= args.index < len(sents)):
