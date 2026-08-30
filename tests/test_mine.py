@@ -1,6 +1,7 @@
 """mine.py 純函式（字幕解析、句子重建、拼法備援）與 CLI 參數驗證的回歸測試。"""
 import json
 import sys
+import urllib.error
 
 import pytest
 
@@ -354,3 +355,92 @@ def test_fetch_definition_records_nothing_without_api_key(monkeypatch):
     mine.UNCERTAIN_SENSES.clear()
     assert mine.fetch_definition("widget", sentence="Anything at all.") == ""
     assert mine.UNCERTAIN_SENSES == []
+
+
+# ---------- 翻譯端點的備援 ----------
+#
+# 中文欄靠的是 Google 翻譯網頁版的內部端點（非官方、無保證）。網址裡的 client
+# 參數決定 Google 套用哪套配額：實測 2026-08 起 client=gtx 一律回 429，且與來源
+# IP、User-Agent 都無關——是那個 client 整個被限制。所以要能換下一個繼續試。
+
+def test_translate_falls_back_to_the_next_client(monkeypatch):
+    tried = []
+
+    def fake_get(url, **kw):
+        tried.append("dict-chrome-ex" if "dict-chrome-ex" in url else "gtx")
+        if tried[-1] == "dict-chrome-ex":
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+        return [[["你好", "hello", None, None, 3]]]
+
+    monkeypatch.setattr(mine, "_http_get_json", fake_get)
+    monkeypatch.setattr(mine, "_TRANSLATE_CLIENTS", ("dict-chrome-ex", "gtx"))
+    assert mine._google_translate("hello") == "你好"
+    assert tried == ["dict-chrome-ex", "gtx"]      # 第一個失敗才試第二個
+
+
+def test_translate_stops_at_the_first_working_client(monkeypatch):
+    """第一個就通的話不該再打第二次——多餘的請求只會加速被限流。"""
+    tried = []
+
+    def fake_get(url, **kw):
+        tried.append(url)
+        return [[["你好", "hello", None, None, 3]]]
+
+    monkeypatch.setattr(mine, "_http_get_json", fake_get)
+    assert mine._google_translate("hello") == "你好"
+    assert len(tried) == 1
+
+
+def test_translate_raises_when_every_client_fails(monkeypatch):
+    """全部都不通時要拋出來，讓上層記錄失敗、把中文欄留空，而不是回傳空字串假裝成功。"""
+    def fake_get(url, **kw):
+        raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+
+    monkeypatch.setattr(mine, "_http_get_json", fake_get)
+    with pytest.raises(urllib.error.HTTPError):
+        mine._google_translate("hello")
+
+
+def test_translate_joins_multi_segment_responses(monkeypatch):
+    """長句會被切成多段回傳，要接回去；空段落要略過。"""
+    monkeypatch.setattr(mine, "_http_get_json",
+                        lambda url, **kw: [[["前半段", "a", None], [None, "b"], ["後半段", "c"]]])
+    assert mine._google_translate("whatever") == "前半段後半段"
+
+
+def test_translate_does_not_switch_client_on_transient_errors(monkeypatch):
+    """逾時／連線重置這類暫時性錯誤不該換 client。
+
+    _http_get_json 內部本來就會重試；這裡再換一個 client 等於同一次故障打兩倍的
+    請求，而反覆請求正是最容易讓端點把你限流的事。
+    """
+    tried = []
+
+    def fake_get(url, **kw):
+        tried.append(url)
+        raise TimeoutError("connection timed out")
+
+    monkeypatch.setattr(mine, "_http_get_json", fake_get)
+    with pytest.raises(TimeoutError):
+        mine._google_translate("hello")
+    assert len(tried) == 1          # 只打了第一個，沒有擴散
+
+
+def test_translate_keeps_the_first_failure_for_diagnosis(monkeypatch):
+    """全部失敗時回報第一個 client 的錯誤——後面那個是已知會壞的備援，
+    拿它的錯誤去查問題只會誤導。"""
+    def fake_get(url, **kw):
+        code = 503 if "dict-chrome-ex" in url else 429
+        raise urllib.error.HTTPError(url, code, "boom", {}, None)
+
+    monkeypatch.setattr(mine, "_http_get_json", fake_get)
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        mine._google_translate("hello")
+    assert exc.value.code == 503
+
+
+def test_translate_does_not_hide_a_malformed_response(monkeypatch):
+    """回傳格式不如預期是程式問題，要炸出來，不能被當成『換下一個 client』吞掉。"""
+    monkeypatch.setattr(mine, "_http_get_json", lambda url, **kw: {"unexpected": "shape"})
+    with pytest.raises((KeyError, TypeError, IndexError)):
+        mine._google_translate("hello")

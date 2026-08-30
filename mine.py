@@ -711,11 +711,32 @@ def fetch_definition(word, sentence="", surface=""):
         return ""
 
 
+# 這是 Google 翻譯網頁版的內部端點，非官方、沒有保證。client 參數決定它套用哪套
+# 配額政策：實測 2026-08 起 client=gtx 一律回 429，且與來源 IP 無關（學校直連、
+# 學校 VPN、行動網路三個不同出口都一樣），也與 User-Agent 無關（三種都試過）——
+# 是這個 client 被整個限制掉，不是被當成濫用來源擋。dict-chrome-ex 仍然可用，
+# 回傳格式與 gtx 相同。兩個都留著依序試：哪一個哪天失效無從預測，備援成本極低。
+_TRANSLATE_CLIENTS = ("dict-chrome-ex", "gtx")
+
+
 def _google_translate(text):
-    url = ("https://translate.googleapis.com/translate_a/single"
-           "?client=gtx&sl=en&tl=zh-TW&dt=t&q=" + urllib.parse.quote(text))
-    data = _http_get_json(url, timeout=10)
-    return "".join(seg[0] for seg in data[0] if seg[0])
+    first_error = None
+    for client in _TRANSLATE_CLIENTS:
+        url = ("https://translate.googleapis.com/translate_a/single"
+               f"?client={client}&sl=en&tl=zh-TW&dt=t&q=" + urllib.parse.quote(text))
+        try:
+            data = _http_get_json(url, timeout=10)
+        except urllib.error.HTTPError as ex:
+            # 只有伺服器明確回絕（配額用盡、封鎖）才值得換下一個 client。
+            # timeout / SSL / 連線重置這類暫時性錯誤 _http_get_json 內部已經重試過，
+            # 這裡再換 client 等於同一次故障打兩倍的請求——而反覆請求正是最容易
+            # 加速被限流的事，所以讓它直接往上拋。
+            first_error = first_error or ex     # 留第一個（偏好 client）的失敗，較有診斷價值
+            continue
+        # 解析放在 try 外面：回傳格式不如預期是程式問題，不該被當成「這個 client
+        # 不可用」而靜靜換下一個，那會把真正的 bug 藏起來。
+        return "".join(seg[0] for seg in data[0] if seg[0])
+    raise first_error
 
 
 def fetch_chinese(word, definition_hint=""):

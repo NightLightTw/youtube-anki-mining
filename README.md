@@ -265,6 +265,7 @@ cd /path/to/youtube-anki-mining
 | 影片下載 `HTTP Error 403` | YouTube 暫時擋特定 player client。`run.sh` 會自動改用 android client 重試；重跑同一指令通常即可。 |
 | 找不到英文字幕檔 | 該影片沒有英文字幕（人工或自動皆無），無法製卡。腳本已能處理 `en-GB` 等地區變體標籤。 |
 | 定義/同義字留空 | `.env` 沒設 Merriam-Webster 金鑰，或當日超過 1000 次額度。 |
+| **繁中釋義整批留空**，畫面出現 `中文翻譯失敗：HTTP Error 429` | 中文靠的是 Google 翻譯網頁版的內部端點（非官方、沒有保證），Google 隨時可能收緊某個存取管道。**這通常與你的網路或 IP 無關**——換 VPN 多半沒用。管線內建了備援管道會自動輪替；若全部失效，可先照常建卡再手動補中文欄。 |
 | 卡片跑進「預設」牌組 | 某些版本 AnkiConnect 的 `addNote` 忽略 `deckName`；`mine.py` 已用 `changeDeck` 處理。 |
 | iPhone 上斷圖／斷音 | 媒體檔名大小寫不一致（iOS 區分大小寫）。`mine.py` 已把檔名一律小寫。 |
 | 句子破碎/不完整 | 該影片只有自動字幕，品質有限；可換索引或用手動模式修句。 |
