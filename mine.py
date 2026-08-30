@@ -671,11 +671,38 @@ def _sense_is_a_guess(shortdefs, sentence, surface):
     return bool(scores) and max(scores) == 0
 
 
-# 建卡過程中累積「詞義可能挑錯」的字，--auto 跑完會列出來讓使用者知道該回頭看哪幾個。
-# 手動 --index 模式一次只做一張，逐張的那行提示就夠了，不另外彙總。
-# 用模組層變數而非回傳值，是因為 fetch_definition 埋在 add_card 深處，
-# 一路往上傳旗標要改動四層簽章，對一個純提示訊息不值得。
-UNCERTAIN_SENSES = []
+def _entry_is_a_guess(homographs, wanted_pos):
+    """「挑哪個詞條」是不是盲選的——比義項挑錯更嚴重，整條定義的詞性都會不對。
+
+    _guess_pos 猜不出句中該字的詞性、而這個字在字典裡有多個不同詞性的詞條時，
+    fetch_definition 只能退回 homographs[0]（字典排第一的那個）。實例：例句講的是
+    "train fares"（名詞，票價），但 fare 的第一個詞條是動詞，於是卡片寫成
+    「to do something well or badly」，整條都對不上。
+
+    兩種情況都算盲選，因為 fetch_definition 的 next(..., homographs[0]) 對兩者
+    的結果是一樣的：
+      1. _guess_pos 回 None——句子裡看不出詞性；
+      2. 猜出了詞性，但字典裡根本沒有那個詞性的詞條（例如猜 verb、字典只收
+         noun/adjective）——這時 next() 一樣會靜靜退回第一個詞條。
+
+    這個判斷是結構性的（「沒有依據可選」是事實，不是猜測），所以比 _sense_is_a_guess
+    精確；後者只代表「沒有訊號」，而沒訊號多半只是因為例句與字典用詞不同。
+    """
+    available = {e.get("fl") for e in homographs}
+    if len(available) <= 1:
+        return False                    # 只有一種詞性，退回第一個不是猜
+    return wanted_pos not in available
+
+
+# 最近一次 fetch_definition 的不確定旗標（"pos" / "sense"）。add_card 讀它決定要在
+# note 上打哪些 tag——卡面刻意維持不變（Anki 的最小資訊原則），不確定性放進 tag，
+# 之後在 Anki 用 tag:pos-uncertain 就能把該複查的整批撈出來，複習時完全看不到。
+# 用模組層變數而非回傳值，是因為 fetch_definition 的回傳型別（定義字串）已被多處
+# 使用，改成 tuple 會波及每個呼叫端，對一個附帶資訊不值得。
+LAST_FLAGS = set()
+
+# 整批建卡的彙總，--auto 跑完列出來。手動 --index 一次只做一張，逐張提示就夠。
+UNCERTAIN = []   # [(word, frozenset(flags))]
 
 
 def fetch_definition(word, sentence="", surface=""):
@@ -688,6 +715,7 @@ def fetch_definition(word, sentence="", surface=""):
          ——處理同詞性不同義（endure=忍受 vs 持續存在、tricky=棘手 vs 狡猾）。
     訊號不足時兩層都安全退回舊行為（POS 第一條詞條、MW 第一個詞義）。
     """
+    LAST_FLAGS.clear()
     if not MW_LEARNERS_KEY:
         return ""
     try:
@@ -695,6 +723,11 @@ def fetch_definition(word, sentence="", surface=""):
         if not homographs:
             return ""
         wanted_pos = _guess_pos(surface or word, sentence) if sentence else None
+        if _entry_is_a_guess(homographs, wanted_pos):
+            LAST_FLAGS.add("pos")
+            kinds = ", ".join(sorted({e.get("fl", "?") for e in homographs}))
+            print(f"  ⚠ 詞性可能挑錯：{word} 在字典有多種詞性（{kinds}），"
+                  f"但句子裡看不出是哪一種，只能用排第一的")
         entry = next((e for e in homographs if e.get("fl") == wanted_pos), homographs[0])
         pos = entry.get("fl", "")
         shortdefs = entry.get("shortdef", [])
@@ -702,7 +735,7 @@ def fetch_definition(word, sentence="", surface=""):
             return ""
         idx = _pick_sense(shortdefs, sentence, surface)
         if _sense_is_a_guess(shortdefs, sentence, surface):
-            UNCERTAIN_SENSES.append(word)
+            LAST_FLAGS.add("sense")
             print(f"  ⚠ 詞義可能挑錯：{word} 有 {len(shortdefs)} 個候選字義，"
                   f"但沒有一個對得上例句，只能退回第一個")
         return f"<i>{html.escape(pos)}</i> {_mw_clean(shortdefs[idx])}"
@@ -855,6 +888,8 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
 
     surface = highlight_word or word
     definition = fetch_definition(word, sentence=sent["text"], surface=surface)
+    # 立刻複製：LAST_FLAGS 屬於「最近一次查詢」，下面還會呼叫其他 fetch_*
+    flags = frozenset(LAST_FLAGS)
     synonyms = fetch_synonyms(word, sentence=sent["text"], surface=surface)
     chinese = fetch_chinese(word, definition_hint=definition)
     url = f"https://youtu.be/{urllib.parse.quote(video_id)}?t={int(start)}"
@@ -875,7 +910,10 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
             "Source": html.escape(title),
             "URL": f'<a href="{html.escape(url, quote=True)}">{html.escape(url)}</a>',
         },
-        "tags": ["youtube-mining", video_id],
+        # 不確定性放 tag 不放卡面：複習時看到的東西完全不變（卡片資訊越少記憶效果
+        # 越好），但在 Anki 搜 tag:pos-uncertain 就能把該複查的整批撈出來。
+        "tags": (["youtube-mining", video_id]
+                 + [f"{k}-uncertain" for k in ("pos", "sense") if k in flags]),
         "options": {"allowDuplicate": False},
     }
     note_id = invoke("addNote", note=note)
@@ -890,6 +928,10 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
     print(f"  Synonyms: {synonyms or '(無)'}")
     print(f"  Audio: {audio_fn} / Image: {img_fn if save_image else '(未留存)'}")
     print(f"  URL: {url}")
+    if flags:
+        # 記在這裡而不是 fetch_definition 裡：這樣彙總清單與卡片上的 tag 永遠一致，
+        # 不會出現「彙總列了但卡片沒建成」或「卡片有 tag 但彙總漏掉」。
+        UNCERTAIN.append((word, flags))
     return note_id
 
 
@@ -985,7 +1027,7 @@ def main():
                 print(f"  [{c['lemma']:14s} z={c['zipf']:.1f}] {c['sent']['text']}")
             return
         ok = skipped = failed = 0
-        UNCERTAIN_SENSES.clear()      # 這是單次執行的累計，不是跨次的
+        UNCERTAIN.clear()             # 這是單次執行的累計，不是跨次的
         for c in picks:
             try:
                 nid = add_card(args.video_id, video, c["sent"], c["lemma"],
@@ -1002,13 +1044,19 @@ def main():
                 print(f"✗ 失敗 {c['lemma']}：{ex}\n")
         print(f"完成：建立 {ok} 張、跳過(重複) {skipped} 張、失敗 {failed} 張"
               f"（候選 {len(picks)}）")
-        if UNCERTAIN_SENSES:
-            print(f"\n⚠ 有 {len(UNCERTAIN_SENSES)} 個詞的詞義是猜的，"
-                  f"建議回頭確認 Definition 與 Chinese 欄：")
-            print("   " + "、".join(UNCERTAIN_SENSES))
-            print("   （字典給了多個字義，但沒有一個對得上例句，只能退回第一個。"
-                  "這是提醒不是判定：在目前 38 張對話／教學影片的樣本裡，"
-                  "這類提示有 12/20 確實挑錯，另外還漏掉 3 個有分數卻選錯的）")
+        pos_bad = [w for w, f in UNCERTAIN if "pos" in f]
+        sense_bad = [w for w, f in UNCERTAIN if "sense" in f]
+        if pos_bad or sense_bad:
+            print("\n⚠ 這些卡的定義是管線猜的，已打上 tag，可在 Anki 搜尋列篩出來複查：")
+            if pos_bad:
+                print(f"   tag:pos-uncertain（{len(pos_bad)} 個）  " + "、".join(pos_bad))
+                print("     字典裡有多種詞性，但句子看不出是哪一種——整條定義的詞性"
+                      "都可能不對，這類最值得優先看")
+            if sense_bad:
+                print(f"   tag:sense-uncertain（{len(sense_bad)} 個）  " + "、".join(sense_bad))
+                print("     詞性對了，但同一詞性下的幾個意思沒有一個對得上例句")
+            print("   注意：沒被標記不代表就是對的——管線「有把握地選錯」的情況"
+                  "抓不到（實測樣本裡約每 3 個錯誤會漏掉 1 個）")
         return
 
     if not (0 <= args.index < len(sents)):

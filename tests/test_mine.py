@@ -324,37 +324,33 @@ def test_fetch_definition_records_the_word_when_it_had_to_guess(monkeypatch):
     monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
     monkeypatch.setattr(mine, "_mw_get",
                         lambda ref, key, w: _mw_entry(["a small gadget", "a whatsit"]))
-    mine.UNCERTAIN_SENSES.clear()
     out = mine.fetch_definition("widget", sentence="Hold on, let me check that again.",
                                 surface="widget")
     assert "a small gadget" in out                 # 仍然退回第一義，行為不變
-    assert mine.UNCERTAIN_SENSES == ["widget"]     # 但有記下來
+    assert "sense" in mine.LAST_FLAGS              # 但標記出來了
 
 
 def test_fetch_definition_records_nothing_when_it_had_evidence(monkeypatch):
     monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
     monkeypatch.setattr(mine, "_mw_get",
                         lambda ref, key, w: _mw_entry(["a small gadget", "a kind of fish"]))
-    mine.UNCERTAIN_SENSES.clear()
     out = mine.fetch_definition("widget", sentence="They served us fish for dinner.",
                                 surface="widget")
     assert "fish" in out
-    assert mine.UNCERTAIN_SENSES == []
+    assert mine.LAST_FLAGS == set()
 
 
 def test_fetch_definition_records_nothing_for_single_sense(monkeypatch):
     monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
     monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: _mw_entry(["the only meaning"]))
-    mine.UNCERTAIN_SENSES.clear()
     mine.fetch_definition("widget", sentence="Hold on, let me check that.", surface="widget")
-    assert mine.UNCERTAIN_SENSES == []
+    assert mine.LAST_FLAGS == set()
 
 
 def test_fetch_definition_records_nothing_without_api_key(monkeypatch):
     monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "")
-    mine.UNCERTAIN_SENSES.clear()
     assert mine.fetch_definition("widget", sentence="Anything at all.") == ""
-    assert mine.UNCERTAIN_SENSES == []
+    assert mine.LAST_FLAGS == set()
 
 
 # ---------- 翻譯端點的備援 ----------
@@ -444,3 +440,166 @@ def test_translate_does_not_hide_a_malformed_response(monkeypatch):
     monkeypatch.setattr(mine, "_http_get_json", lambda url, **kw: {"unexpected": "shape"})
     with pytest.raises((KeyError, TypeError, IndexError)):
         mine._google_translate("hello")
+
+
+# ---------- 詞條層（挑錯詞性）的偵測 ----------
+#
+# 這比義項挑錯嚴重：整條定義的詞性都不對。實例 fare——例句是 "train fares"（名詞
+# 票價），但字典第一個詞條是動詞，卡片就寫成 "to do something well or badly"。
+
+def test_entry_guess_flagged_when_pos_unknown_and_multiple_pos():
+    hs = [{"fl": "verb"}, {"fl": "noun"}]
+    assert mine._entry_is_a_guess(hs, None) is True
+
+
+def test_entry_not_flagged_when_pos_was_determined():
+    """猜得出詞性就是有依據的選擇，不算盲選。"""
+    hs = [{"fl": "verb"}, {"fl": "noun"}]
+    assert mine._entry_is_a_guess(hs, "noun") is False
+
+
+def test_entry_not_flagged_when_only_one_pos():
+    """只有一種詞性就沒得挑，退回第一個不是猜。"""
+    assert mine._entry_is_a_guess([{"fl": "noun"}, {"fl": "noun"}], None) is False
+
+
+def test_fetch_definition_sets_pos_flag(monkeypatch):
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: [
+        {"hwi": {"hw": "fare"}, "fl": "verb", "shortdef": ["to do something well or badly"]},
+        {"hwi": {"hw": "fare"}, "fl": "noun", "shortdef": ["the money a person pays to travel"]},
+    ])
+    monkeypatch.setattr(mine, "_guess_pos", lambda *a: None)
+    out = mine.fetch_definition("fare", sentence="They're saying train fares might go up.",
+                                surface="fares")
+    assert "well or badly" in out              # 行為不變，仍退回第一個詞條
+    assert "pos" in mine.LAST_FLAGS            # 但標記出來了
+
+
+def test_add_card_tags_carry_the_uncertainty(monkeypatch, tmp_path):
+    """旗標要變成 note 的 tag——卡面不動，之後在 Anki 用 tag 篩出來複查。"""
+    seen = {}
+
+    def fake_invoke(action, **kw):
+        if action == "canAddNotes":
+            return [True]
+        if action == "addNote":
+            seen["tags"] = kw["note"]["tags"]
+            return 1
+        return None
+
+    monkeypatch.setattr(mine, "invoke", fake_invoke)
+    monkeypatch.setattr(mine, "extract_audio", lambda *a, **k: None)
+    monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
+    monkeypatch.setattr(mine, "store", lambda p, f: None)
+    monkeypatch.setattr(mine, "fetch_synonyms", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_chinese", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "MEDIA_DIR", str(tmp_path))
+
+    def fake_def(word, sentence="", surface=""):
+        mine.LAST_FLAGS.clear()
+        mine.LAST_FLAGS.update({"pos", "sense"})
+        return "x"
+
+    monkeypatch.setattr(mine, "fetch_definition", fake_def)
+    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
+    mine.add_card("vid", "v.mp4", sent, "alpha", "t")
+    assert seen["tags"] == ["youtube-mining", "vid", "pos-uncertain", "sense-uncertain"]
+
+
+def test_add_card_has_no_uncertainty_tags_when_confident(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_invoke(action, **kw):
+        if action == "canAddNotes":
+            return [True]
+        if action == "addNote":
+            seen["tags"] = kw["note"]["tags"]
+            return 1
+
+    monkeypatch.setattr(mine, "invoke", fake_invoke)
+    monkeypatch.setattr(mine, "extract_audio", lambda *a, **k: None)
+    monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
+    monkeypatch.setattr(mine, "store", lambda p, f: None)
+    monkeypatch.setattr(mine, "fetch_synonyms", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_chinese", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "MEDIA_DIR", str(tmp_path))
+    monkeypatch.setattr(mine, "fetch_definition",
+                        lambda *a, **k: (mine.LAST_FLAGS.clear(), "x")[1])
+    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
+    mine.add_card("vid", "v.mp4", sent, "alpha", "t")
+    assert seen["tags"] == ["youtube-mining", "vid"]
+
+
+def test_entry_flagged_when_guessed_pos_absent_from_dictionary():
+    """猜出了詞性、但字典沒收那個詞性——next() 一樣靜靜退回第一個詞條，也是盲選。
+
+    這條在早期版本漏掉了：當時只檢查 `wanted_pos is None`。
+    """
+    hs = [{"fl": "noun"}, {"fl": "adjective"}]
+    assert mine._entry_is_a_guess(hs, "verb") is True
+    assert mine._entry_is_a_guess(hs, "noun") is False     # 字典有這個詞性就不是猜
+
+
+def test_early_returns_do_not_leak_previous_flags(monkeypatch):
+    """每條提早結束的路徑都必須把旗標清乾淨，否則上一張卡的不確定性會被貼到下一張。"""
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "")
+    mine.LAST_FLAGS.update({"pos", "sense"})           # 假裝上一次留下的
+    mine.fetch_definition("widget", sentence="Anything.")
+    assert mine.LAST_FLAGS == set()
+
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: [])   # 查無詞條
+    mine.LAST_FLAGS.update({"pos"})
+    mine.fetch_definition("widget", sentence="Anything.")
+    assert mine.LAST_FLAGS == set()
+
+    def boom(ref, key, w):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(mine, "_mw_get", boom)          # 例外路徑
+    mine.LAST_FLAGS.update({"sense"})
+    assert mine.fetch_definition("widget", sentence="Anything.") == ""
+    assert mine.LAST_FLAGS == set()
+
+
+def test_uncertain_summary_only_records_cards_that_were_created(monkeypatch, tmp_path):
+    """建卡失敗的字不該出現在最後的複查清單裡——那張卡根本不存在。"""
+    monkeypatch.setattr(mine, "extract_audio", lambda *a, **k: None)
+    monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
+    monkeypatch.setattr(mine, "store", lambda p, f: None)
+    monkeypatch.setattr(mine, "fetch_synonyms", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_chinese", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "MEDIA_DIR", str(tmp_path))
+    monkeypatch.setattr(mine, "fetch_definition",
+                        lambda *a, **k: (mine.LAST_FLAGS.clear(),
+                                         mine.LAST_FLAGS.add("pos"), "x")[2])
+
+    def failing_invoke(action, **kw):
+        if action == "canAddNotes":
+            return [True]
+        raise RuntimeError("AnkiConnect 掛了")
+
+    monkeypatch.setattr(mine, "invoke", failing_invoke)
+    mine.UNCERTAIN.clear()
+    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
+    with pytest.raises(RuntimeError):
+        mine.add_card("vid", "v.mp4", sent, "alpha", "t")
+    assert mine.UNCERTAIN == []
+
+
+def test_uncertain_summary_records_created_cards(monkeypatch, tmp_path):
+    monkeypatch.setattr(mine, "extract_audio", lambda *a, **k: None)
+    monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
+    monkeypatch.setattr(mine, "store", lambda p, f: None)
+    monkeypatch.setattr(mine, "fetch_synonyms", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_chinese", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "MEDIA_DIR", str(tmp_path))
+    monkeypatch.setattr(mine, "fetch_definition",
+                        lambda *a, **k: (mine.LAST_FLAGS.clear(),
+                                         mine.LAST_FLAGS.add("sense"), "x")[2])
+    monkeypatch.setattr(mine, "invoke",
+                        lambda action, **kw: [True] if action == "canAddNotes" else 1)
+    mine.UNCERTAIN.clear()
+    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
+    mine.add_card("vid", "v.mp4", sent, "alpha", "t")
+    assert mine.UNCERTAIN == [("alpha", frozenset({"sense"}))]
