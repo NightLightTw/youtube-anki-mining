@@ -121,7 +121,7 @@ def main():
 
     # 本次執行的統計（不跨次累積，免得看不出這一趟做了什麼）
     n_tagged = n_clean = n_mismatch = n_already = 0
-    hits = {"pos": [], "sense": []}
+    hits = {k: [] for k in TAG}      # 從對照表推導，不硬寫旗標名
     pending = {}                 # {標籤組合: [note_id]}，累積到 BATCH 再一次打
     staged = []                  # 已算完、等標籤寫入後才計入 done 的 id
     stopped = None
@@ -184,7 +184,7 @@ def main():
 
     print(f"\n{'（乾跑：沒有打標籤，也沒有寫進度檔）' if args.dry_run else '本次完成'}")
     print(f"  新打標籤            {n_tagged} 張")
-    for k in ("pos", "sense"):
+    for k in TAG:
         if hits[k]:
             more = " …" if len(hits[k]) > 12 else ""
             print(f"    {TAG[k]:16s} {len(hits[k]):>4d} 張  {'、'.join(hits[k][:12])}{more}")

@@ -851,3 +851,21 @@ def test_backfill_tool_covers_every_flag_the_pipeline_can_produce():
     spec.loader.exec_module(mod)
     for flag in mine.UNCERTAIN_TAG:
         assert flag in mod.TAG, f"回溯工具不認得旗標 {flag}"
+
+
+def test_backfill_tool_has_no_hardcoded_flag_lists():
+    """回溯工具的統計容器要涵蓋每一種旗標。
+
+    這支工具已經因為「某處硬寫了旗標清單、管線新增旗標時沒跟上」壞過三次：
+    回傳值的位置解包、TAG 對照表、hits 統計容器。這條測試直接跑一遍主流程用到
+    的容器建構，確保它認得所有旗標。
+    """
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location(
+        "backfill_tags", pathlib.Path(__file__).parent.parent / "tools" / "backfill_tags.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    hits = {k: [] for k in mod.TAG}
+    for flag in mine.UNCERTAIN_TAG:
+        assert flag in hits, f"統計容器少了旗標 {flag}"
+        assert flag in mod.TAG, f"標籤對照表少了旗標 {flag}"
