@@ -40,7 +40,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import mine
 from anki import invoke
 
-TAG = {"pos": "pos-uncertain", "sense": "sense-uncertain"}
+# 直接沿用管線的對照表，不自己維護一份。這裡先前是獨立的字典，管線多了 nodef
+# 旗標之後這邊沒跟上，一跑就 KeyError——同一份資訊放兩個地方遲早會不同步。
+TAG = mine.UNCERTAIN_TAG
 BATCH = 50          # 每累積這麼多張就打一次標籤並存檔，減少 API 往返也限制中斷損失
 DEFAULT_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              ".backfill_tags_state.json")

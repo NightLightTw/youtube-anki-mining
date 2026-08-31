@@ -836,3 +836,18 @@ def test_nodef_reaches_the_note_tags(monkeypatch, tmp_path):
     sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
     mine.add_card("vid", "v.mp4", sent, "aneurysm", "t")
     assert "no-definition" in seen["tags"]
+
+
+def test_backfill_tool_covers_every_flag_the_pipeline_can_produce():
+    """回溯工具的標籤對照表必須認得管線會產生的每一種旗標。
+
+    這條測試存在的原因：管線加了 nodef 旗標後，回溯工具自己那份對照表沒跟上，
+    一跑就 KeyError。同一份資訊放兩個地方遲早會不同步。
+    """
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location(
+        "backfill_tags", pathlib.Path(__file__).parent.parent / "tools" / "backfill_tags.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for flag in mine.UNCERTAIN_TAG:
+        assert flag in mod.TAG, f"回溯工具不認得旗標 {flag}"
