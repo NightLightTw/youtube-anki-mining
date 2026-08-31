@@ -603,3 +603,50 @@ def test_uncertain_summary_records_created_cards(monkeypatch, tmp_path):
     sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
     mine.add_card("vid", "v.mp4", sent, "alpha", "t")
     assert mine.UNCERTAIN == [("alpha", frozenset({"sense"}))]
+
+
+# ---------- 字幕裡的非語音標記 ----------
+#
+# TED 之類的人工字幕會用 (Laughter) 標註現場聲響。那些會被寫進卡片例句，但音檔裡
+# 沒有這段聲音，複習時就變成「字幕有、聽不到」。實測一支 TED 影片有 23 處。
+
+def test_nonspeech_markers_are_stripped(tmp_path):
+    p = tmp_path / "v.en.srt"
+    p.write_text(
+        "1\n00:00:01,000 --> 00:00:04,000\n(Laughter) You don't need to be an expert.\n\n"
+        "2\n00:00:05,000 --> 00:00:08,000\nIt works. (Applause)\n\n"
+        "3\n00:00:09,000 --> 00:00:12,000\nShe said it (very quietly) to me.\n",
+        encoding="utf-8")
+    cues = parse_srt(str(p))
+    assert cues[0][2] == "You don't need to be an expert."
+    assert cues[1][2] == "It works."
+    # 一般括號是正文的一部分，不能一起清掉
+    assert cues[2][2] == "She said it (very quietly) to me."
+
+
+@pytest.mark.parametrize("marker", [
+    # 掃過 repo 內全部字幕實際出現的形態，用詞比想像中多樣
+    "(Laughter)", "(Applause)", "(Cheers and applause)", "(Clears throat)",
+    "(Imitates barking)", "(Snaps her fingers)", "(With the audience)",
+    "(Video starts)", "(Soothing music)", "(Crack)", "(Sigh)",
+    "(laughter)", "(applause)",   # W3C 轉錄指引建議非語音標記用小寫
+    "(LAUGHTER)",
+])
+def test_real_world_nonspeech_markers_are_stripped(tmp_path, marker):
+    p = tmp_path / "v.en.srt"
+    p.write_text(f"1\n00:00:01,000 --> 00:00:04,000\n{marker} Hello there.\n", encoding="utf-8")
+    assert parse_srt(str(p))[0][2] == "Hello there."
+
+
+@pytest.mark.parametrize("kept", [
+    "(very quietly)",   # 補充說明
+    "(I think)",
+    "(see chapter 3)",
+    "(2019)",
+    "(New York)",       # 地名——早期版本用「大寫開頭的短句」當規則時會被誤刪
+    "(John Doe)",       # 人名，同上
+])
+def test_ordinary_parentheses_are_kept(tmp_path, kept):
+    p = tmp_path / "v.en.srt"
+    p.write_text(f"1\n00:00:01,000 --> 00:00:04,000\nShe said it {kept} to me.\n", encoding="utf-8")
+    assert parse_srt(str(p))[0][2] == f"She said it {kept} to me."

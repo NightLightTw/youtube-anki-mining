@@ -120,11 +120,20 @@ echo "  標題: $TITLE"
 # 4) 下載英文字幕（--write-subs 人工字幕 + --write-auto-subs 自動字幕並用：
 #    部分影片如 BBC 只有人工上傳字幕、沒有 en 自動字幕，兩旗標並用時 yt-dlp
 #    會優先抓品質較好的人工字幕。若已存在則直接覆蓋，天然可重跑）
-#    --sub-lang 用 "en.*" 正則而非精確比對 "en"：部分影片（實測多支 BBC 節目）
-#    字幕語言標籤是 en-GB 這類地區變體、不是單純的 en，精確比對會直接找不到字幕
-#    而整支失敗。下載後統一改名成 .en.srt，因為 mine.py 是用固定檔名
-#    {video_id}.en.srt 找字幕的，不知道地區變體這回事。
+#    --sub-lang 不能用精確的 "en"：部分影片（實測多支 BBC 節目）字幕語言標籤是
+#    en-GB 這類地區變體，精確比對會找不到字幕而整支失敗。但也不能用 "en.*" 正則
+#    ——YouTube 的自動翻譯字幕標籤同樣是 en-XX（en-ar 阿拉伯文、en-zh-TW 中文…），
+#    實測一支 TED 影片會一口氣抓 15 種語言，全都用不到，還因為請求太密集被回
+#    HTTP 429 而中斷。改成明確列出英語系的地區變體。下載後統一改名成 .en.srt，
+#    因為 mine.py 是用固定檔名 {video_id}.en.srt 找字幕的，不知道地區變體這回事。
 step "下載字幕"
+# 英文字幕的語言標籤。yt-dlp 的 --sub-lang 是把每個項目當正則做完整比對，所以
+# 這裡用一個受限的正則而不是 "en.*"：後者會連 en-ar、en-zh-TW 這些「翻譯成其他
+# 語言」的版本一起抓（實測一支 TED 影片有 15 種），用不到、拖慢下載，還會觸發
+# YouTube 的 HTTP 429 限流而整支中斷。
+# 尾巴的 (?:-[A-Za-z0-9]+)* 是為了容納 en-US-x-something 這類帶擴充碼的標籤。
+# 代價是沒列到的英文地區碼會抓不到字幕——真遇到時下面的錯誤訊息會提示怎麼查。
+EN_LANGS='en(?:-(?:orig|GB|UK|US|CA|AU|NZ|IE|IN|ZA|SG|PH|HK)(?:-[A-Za-z0-9]+)*)?' 
 SRT="media/${VIDEO_ID}.en.srt"
 # 先清掉舊的 .en*.srt 殘留（不論是先前用純 en 抓到的正規檔名、還是地區變體），
 # 保證等一下抓完後 glob 到的一定是這次剛下載的新檔，不會因為舊檔已存在、
@@ -132,7 +141,7 @@ SRT="media/${VIDEO_ID}.en.srt"
 # 卻拿到舊內容，且不會有任何錯誤訊息，非常隱蔽）。
 rm -f "media/${VIDEO_ID}".en*.srt
 "$YTDLP" --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs \
-  --sub-lang "en.*" --sub-format srt --convert-subs srt -o "media/%(id)s.%(ext)s" "$URL"
+  --sub-lang "$EN_LANGS" --sub-format srt --convert-subs srt -o "media/%(id)s.%(ext)s" "$URL"
 if [ ! -s "$SRT" ]; then
   FOUND_SRT=$(ls "media/${VIDEO_ID}".en*.srt 2>/dev/null | head -1 || true)
   if [ -n "$FOUND_SRT" ]; then
@@ -142,6 +151,9 @@ fi
 if [ ! -s "$SRT" ]; then
   echo "✗ 找不到英文字幕檔：$SRT" >&2
   echo "  這支影片可能沒有英文字幕（人工或自動皆無），無法用本工具製卡。" >&2
+  echo "  若確定有英文字幕，可能是語言標籤不在預期清單內。用下列指令查看實際標籤，" >&2
+  echo "  再把它加進 run.sh 的 EN_LANGS：" >&2
+  echo "    yt-dlp --list-subs \"$URL\"" >&2
   exit 1
 fi
 
@@ -153,7 +165,7 @@ step "下載逐字時間戳 (json3，可選)"
 JSON3="media/${VIDEO_ID}.en.json3"
 rm -f "media/${VIDEO_ID}".en*.json3   # 同上，避免悄悄用到重跑前的舊逐字時間戳
 "$YTDLP" --no-warnings --no-playlist --skip-download --write-auto-subs \
-  --sub-lang "en.*" --sub-format json3 -o "media/%(id)s.%(ext)s" "$URL" >/dev/null 2>&1 || true
+  --sub-lang "$EN_LANGS" --sub-format json3 -o "media/%(id)s.%(ext)s" "$URL" >/dev/null 2>&1 || true
 if [ ! -s "$JSON3" ]; then
   FOUND_JSON3=$(ls "media/${VIDEO_ID}".en*.json3 2>/dev/null | head -1 || true)
   if [ -n "$FOUND_JSON3" ]; then

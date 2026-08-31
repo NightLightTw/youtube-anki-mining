@@ -195,7 +195,7 @@ MW_THESAURUS_KEY=你的-thesaurus-key
 ID=iDG0rwm9GaQ   # 換成你的影片 ID
 
 # 1) 下載英文字幕 + 低畫質影片（音檔來源）
-.venv/bin/yt-dlp --write-subs --write-auto-subs --sub-lang "en.*" --sub-format srt --convert-subs srt \
+.venv/bin/yt-dlp --write-subs --write-auto-subs --sub-lang 'en(?:-(?:orig|GB|UK|US|CA|AU|NZ|IE|IN|ZA|SG|PH|HK)(?:-[A-Za-z0-9]+)*)?' --sub-format srt --convert-subs srt \
   --skip-download -o "media/%(id)s.%(ext)s" "https://youtu.be/$ID"
 # 若抓到的是 en-GB 等地區變體檔名，改名成 mine.py 預期的 .en.srt（run.sh 會自動做，這裡要手動）
 [ -s "media/$ID.en.srt" ] || mv "$(ls "media/$ID".en*.srt | head -1)" "media/$ID.en.srt"

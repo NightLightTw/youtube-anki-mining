@@ -44,6 +44,28 @@ MW_BASE = "https://www.dictionaryapi.com/api/v3/references"
 
 
 # ---------- 字幕解析 ----------
+# 字幕裡代表現場聲響而非說話內容的標記，例如 (Laughter)、(Applause)、(Video starts)。
+# 這類標記會被當成句子的一部分寫進例句，但音檔裡沒有這段聲音，卡片就變成
+# 「字幕有、但聽不到」。實測一支 TED 影片有 23 處。
+#
+# 判斷方式是「括號裡有沒有出現聲響或動作詞」，不是看拼字型態。早期版本用
+# 「大寫開頭的短句」當規則，會把 (New York)、(John Doe) 這種人名地名一起刪掉——
+# 那是正文的一部分。詞彙比對沒有這個問題，也順帶能處理小寫寫法（(laughter)），
+# W3C 的轉錄指引其實建議非語音標記用小寫。
+_NONSPEECH_CUES = (
+    r"laugh\w*|chuckl\w*|giggl\w*|applaus\w*|clap\w*|cheer\w*|boo|boos|boos\w+|"
+    r"music|sing\w*|hum{1,2}\w*|whistl\w*|"
+    r"sigh\w*|gasp\w*|groan\w*|moan\w*|sob\w*|cry\w*|cries|weep\w*|scream\w*|"
+    r"shout\w*|yell\w*|whisper\w*|mumbl\w*|stammer\w*|"
+    r"cough\w*|sneez\w*|snap\w*|clear\w*|swallow\w*|exhal\w*|inhal\w*|breath\w*|"
+    r"imitat\w*|mimic\w*|impersonat\w*|"
+    r"video|audio|recording|record\w*|beep\w*|noise|silence|pause|crack\w*|thud|bang|"
+    r"inaudible|unintelligible|crosstalk|audience|crowd|footsteps?|knock\w*"
+)
+_NONSPEECH = re.compile(rf"\(\s*[^)]{{0,50}}?\b(?:{_NONSPEECH_CUES})\b[^)]{{0,50}}?\)",
+                        re.IGNORECASE)
+
+
 def parse_srt(path):
     content = open(path, encoding="utf-8").read()
     cues = []
@@ -61,6 +83,10 @@ def parse_srt(path):
         text = " ".join(lines[ti + 1:])
         text = re.sub(r">>", " ", text)          # 移除說話者標記
         text = re.sub(r"\[.*?\]", " ", text)      # 移除 [Music] 等
+        # 現場聲響標記（見 _NONSPEECH 的說明）。只清括號裡含聲響／動作詞的，
+        # 一般括號內容（補充說明、人名地名）保留。整個 cue 只有標記時，下面的
+        # `if text:` 會把這個 cue 丟掉——它本來就沒有可學的句子。
+        text = _NONSPEECH.sub(" ", text)
         text = re.sub(r"\s+", " ", text).strip()
         if text:
             cues.append((start, end, text))
