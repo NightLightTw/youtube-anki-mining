@@ -9,6 +9,7 @@
   python mine.py <video_id> --index N --word WORD   依索引建一張卡，目標字 WORD
 """
 import argparse
+import collections
 import base64
 import hashlib
 import html
@@ -514,27 +515,93 @@ def _filter_homographs(data, word, from_thesaurus=False):
     return out
 
 
+# 查詢結果用具名欄位而非位置元組：這個函式先前從回傳 2 個值改成 3 個，散在各處的
+# 位置解包沒有全部跟上（實測 tools/backfill_tags.py 漏改，一跑就 ValueError），
+# 具名存取不會有這個問題。
+MWLookup = collections.namedtuple("MWLookup", "homographs matched_word raw")
+
+
 def _mw_lookup_with_fallback(ref, key, word, from_thesaurus=False):
     """查 MW，headword 比對不到東西時依序嘗試 _SPELLING_VARIANTS 的拼法備援。
 
-    回傳 (homographs, 實際命中的拼法)；都查無則回傳 ([], word)。
+    回傳 MWLookup(homographs, matched_word, raw)。raw 是「原字」的完整回應，讓呼叫端
+    在查無 headword 時能繼續在同一份回應裡找衍生詞（見 _find_run_on），不必重查一次
+    API。都查無時 homographs 為空 list。
     """
     data = _mw_get(ref, key, word)
     homographs = _filter_homographs(data, word, from_thesaurus)
     if homographs:
-        return homographs, word
+        return MWLookup(homographs, word, data)
     for variant_fn in _SPELLING_VARIANTS:
         alt = variant_fn(word)
         if not alt:
             continue
         try:
-            data = _mw_get(ref, key, alt)
-            homographs = _filter_homographs(data, alt, from_thesaurus)
+            alt_data = _mw_get(ref, key, alt)
+            homographs = _filter_homographs(alt_data, alt, from_thesaurus)
             if homographs:
-                return homographs, alt
+                return MWLookup(homographs, alt, data)
         except Exception:
             pass  # 備援查詢本身失敗（逾時等）就當作沒查到，換下一個變體或放棄
-    return [], word
+    return MWLookup([], word, data)
+
+
+# 指人的衍生字尾。母詞定義套不到這類字上：psychotherapist 拿到的會是 psychotherapy
+# 的「用談話治療心理疾病」——那是療法的定義，不是「治療師」這個人。單看詞性擋不掉，
+# 兩者都是名詞。相對地 -ity／-ness／-ion 這類抽象名詞（vulnerability ← vulnerable）
+# 母詞定義還能轉換過去，予以保留。
+_AGENT_SUFFIX = re.compile(r"(?:ist|er|or|ee|eer|ician)$", re.IGNORECASE)
+
+
+
+def _find_run_on(data, word):
+    """headword 對不上時，看看這個字是不是掛在某個詞條底下的派生詞。
+
+    MW 把 -ly 副詞、-ity 名詞、-ist 名詞這類「意思可以從母詞推得」的衍生詞放在母詞
+    條目的 uros 裡，只給詞性、發音和例句，**不給定義**（字典稱為 undefined run-on）。
+    查 humbly 時 MW 回的是 humble 的條目，headword 比對不上就整條被丟掉、定義留空——
+    實測一支 TED 影片 20 張卡有 6 張定義空白，其中 3 張是這個原因。
+
+    回傳 (母詞, 派生詞的詞性, 母詞的 shortdef list)；不適用時回傳 None。
+
+    界線是「會讀錯的擋掉，只是需要轉換的保留」——後者已經標明了母詞，讀者自己
+    轉得過來；前者不管標不標都是錯的。
+
+    擋掉兩種：
+
+      - **母詞是動詞、衍生詞不是**：動詞定義寫成「to do X」，套到名詞或形容詞上
+        語法就不成句——masturbate 的「to touch or rub…」掛在 masturbation 上、
+        enjoy 的「to take pleasure in」掛在 enjoyable 上都是這樣。
+      - **指人的衍生詞**（-ist/-er/-or…）：psychotherapist 會拿到 psychotherapy 的
+        「用談話治療心理疾病」——那是療法不是人，語意直接錯了。單看詞性擋不掉，
+        兩邊都是名詞，只能看字尾。
+
+    保留的例如 humble→humbly（形容詞→副詞，直接套用就通）、vulnerable→vulnerability
+    （形容詞→名詞）、evolution→evolutionary（名詞→形容詞，讀者自行轉換）。
+
+    另外，同時命中多個母詞時也放棄，因為分不出該用哪一個。
+    """
+    target = word.lower()
+    hits = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        shortdefs = entry.get("shortdef") or []
+        if not shortdefs:
+            continue
+        base = re.sub(r"[*]", "", entry.get("hwi", {}).get("hw", ""))
+        for uro in entry.get("uros") or []:
+            if re.sub(r"[*]", "", uro.get("ure", "")).lower() == target:
+                hits.append((base, entry.get("fl", ""), uro.get("fl", ""), shortdefs))
+                break                      # 同一個詞條命中一次就夠，母詞定義是同一組
+    if len(hits) != 1:
+        return None                        # 沒命中，或命中多個母詞而無從選擇
+    base, base_fl, fl, shortdefs = hits[0]
+    if base_fl == "verb" and fl != "verb":
+        return None
+    if fl == "noun" and _AGENT_SUFFIX.search(target):
+        return None
+    return base, fl, shortdefs
 
 
 def _mw_clean(text):
@@ -727,6 +794,11 @@ def _entry_is_a_guess(homographs, wanted_pos):
 # 使用，改成 tuple 會波及每個呼叫端，對一個附帶資訊不值得。
 LAST_FLAGS = set()
 
+# 旗標與 Anki 標籤的對應。定義查不到（nodef）也算一種「這張卡不完整」，而且比
+# 挑錯義項更明顯——卡片背面直接是空的——卻反而沒有任何痕跡，所以一併納入。
+UNCERTAIN_TAG = {"pos": "pos-uncertain", "sense": "sense-uncertain",
+                 "nodef": "no-definition", "lookupfail": "definition-lookup-failed"}
+
 # 整批建卡的彙總，--auto 跑完列出來。手動 --index 一次只做一張，逐張提示就夠。
 UNCERTAIN = []   # [(word, frozenset(flags))]
 
@@ -745,8 +817,21 @@ def fetch_definition(word, sentence="", surface=""):
     if not MW_LEARNERS_KEY:
         return ""
     try:
-        homographs, _ = _mw_lookup_with_fallback("learners", MW_LEARNERS_KEY, word)
+        found = _mw_lookup_with_fallback("learners", MW_LEARNERS_KEY, word)
+        homographs = found.homographs
         if not homographs:
+            run_on = _find_run_on(found.raw, word)
+            if run_on:
+                base, fl, base_defs = run_on
+                # 派生詞在字典裡沒有自己的定義，只能用母詞的。標明「某字的某某形」，
+                # 否則會出現詞性與定義內容打架的情況——vulnerability 標 noun，
+                # 定義文字卻是形容詞的「easily hurt or harmed」。
+                idx = _pick_sense(base_defs, sentence, surface)
+                return (f"<i>{html.escape(fl)}</i>（{html.escape(base)} 的衍生詞）"
+                        f"{_mw_clean(base_defs[idx])}")
+            LAST_FLAGS.add("nodef")
+            print(f"  ⚠ 查無定義：{word} 在 Merriam-Webster Learner's 沒有詞條，"
+                  f"也不是任何詞條的衍生詞")
             return ""
         wanted_pos = _guess_pos(surface or word, sentence) if sentence else None
         if _entry_is_a_guess(homographs, wanted_pos):
@@ -758,6 +843,8 @@ def fetch_definition(word, sentence="", surface=""):
         pos = entry.get("fl", "")
         shortdefs = entry.get("shortdef", [])
         if not shortdefs:
+            LAST_FLAGS.add("nodef")
+            print(f"  ⚠ 查無定義：{word} 在字典裡有詞條，但沒有可用的簡明釋義")
             return ""
         idx = _pick_sense(shortdefs, sentence, surface)
         if _sense_is_a_guess(shortdefs, sentence, surface):
@@ -766,6 +853,10 @@ def fetch_definition(word, sentence="", surface=""):
                   f"但沒有一個對得上例句，只能退回第一個")
         return f"<i>{html.escape(pos)}</i> {_mw_clean(shortdefs[idx])}"
     except Exception as ex:
+        # 網路錯誤、逾時、額度用盡都走這裡。這跟「字典沒收這個字」是兩回事，
+        # 但兩者的 Definition 欄都是空的——不分開標記的話，事後完全看不出某張
+        # 卡是「查不到」還是「當時沒查成」。
+        LAST_FLAGS.add("lookupfail")
         print(f"  (定義查詢失敗：{ex})")
         return ""
 
@@ -840,8 +931,9 @@ def fetch_synonyms(word, n_syn=6, n_ant=4, sentence="", surface=""):
     if not MW_THESAURUS_KEY:
         return ""
     try:
-        homographs, _ = _mw_lookup_with_fallback(
+        found = _mw_lookup_with_fallback(
             "thesaurus", MW_THESAURUS_KEY, word, from_thesaurus=True)
+        homographs, hit_word = found.homographs, found.matched_word
         if not homographs:
             return ""
         wanted_pos = _guess_pos(surface or word, sentence) if sentence else None
@@ -939,7 +1031,8 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
         # 不確定性放 tag 不放卡面：複習時看到的東西完全不變（卡片資訊越少記憶效果
         # 越好），但在 Anki 搜 tag:pos-uncertain 就能把該複查的整批撈出來。
         "tags": (["youtube-mining", video_id]
-                 + [f"{k}-uncertain" for k in ("pos", "sense") if k in flags]),
+                 + [UNCERTAIN_TAG[k] for k in ("pos", "sense", "nodef", "lookupfail")
+                    if k in flags]),
         "options": {"allowDuplicate": False},
     }
     note_id = invoke("addNote", note=note)
@@ -1072,8 +1165,10 @@ def main():
               f"（候選 {len(picks)}）")
         pos_bad = [w for w, f in UNCERTAIN if "pos" in f]
         sense_bad = [w for w, f in UNCERTAIN if "sense" in f]
-        if pos_bad or sense_bad:
-            print("\n⚠ 這些卡的定義是管線猜的，已打上 tag，可在 Anki 搜尋列篩出來複查：")
+        nodef = [w for w, f in UNCERTAIN if "nodef" in f]
+        failed = [w for w, f in UNCERTAIN if "lookupfail" in f]
+        if pos_bad or sense_bad or nodef or failed:
+            print("\n⚠ 這些卡有需要留意的地方，已打上 tag，可在 Anki 搜尋列篩出來複查：")
             if pos_bad:
                 print(f"   tag:pos-uncertain（{len(pos_bad)} 個）  " + "、".join(pos_bad))
                 print("     字典裡有多種詞性，但句子看不出是哪一種——整條定義的詞性"
@@ -1081,6 +1176,13 @@ def main():
             if sense_bad:
                 print(f"   tag:sense-uncertain（{len(sense_bad)} 個）  " + "、".join(sense_bad))
                 print("     詞性對了，但同一詞性下的幾個意思沒有一個對得上例句")
+            if nodef:
+                print(f"   tag:no-definition（{len(nodef)} 個）  " + "、".join(nodef))
+                print("     字典查不到這個字，Definition 欄是空的")
+            if failed:
+                print(f"   tag:definition-lookup-failed（{len(failed)} 個）  " + "、".join(failed))
+                print("     查詢當下失敗了（網路、逾時、額度用盡），不是字典沒收——"
+                      "改天重跑同一支影片就會補上")
             print("   注意：沒被標記不代表就是對的——管線「有把握地選錯」的情況"
                   "抓不到（實測樣本裡約每 3 個錯誤會漏掉 1 個）")
         return

@@ -552,14 +552,16 @@ def test_early_returns_do_not_leak_previous_flags(monkeypatch):
     monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: [])   # 查無詞條
     mine.LAST_FLAGS.update({"pos"})
     mine.fetch_definition("widget", sentence="Anything.")
-    assert mine.LAST_FLAGS == set()
+    # 查無詞條會設 nodef，但上一次殘留的 pos 必須被清掉
+    assert mine.LAST_FLAGS == {"nodef"}
 
     def boom(ref, key, w):
         raise RuntimeError("network down")
     monkeypatch.setattr(mine, "_mw_get", boom)          # 例外路徑
     mine.LAST_FLAGS.update({"sense"})
     assert mine.fetch_definition("widget", sentence="Anything.") == ""
-    assert mine.LAST_FLAGS == set()
+    # 查詢失敗會標 lookupfail，但上一次殘留的 sense 必須被清掉
+    assert mine.LAST_FLAGS == {"lookupfail"}
 
 
 def test_uncertain_summary_only_records_cards_that_were_created(monkeypatch, tmp_path):
@@ -650,3 +652,187 @@ def test_ordinary_parentheses_are_kept(tmp_path, kept):
     p = tmp_path / "v.en.srt"
     p.write_text(f"1\n00:00:01,000 --> 00:00:04,000\nShe said it {kept} to me.\n", encoding="utf-8")
     assert parse_srt(str(p))[0][2] == f"She said it {kept} to me."
+
+
+# ---------- 派生詞（uros）救回 ----------
+#
+# MW 把 -ly 副詞、-ity 名詞這類「意思可從母詞推得」的衍生詞掛在母詞條目底下，
+# 只給詞性和例句、不給定義。查 humbly 時 MW 回的是 humble 的條目，headword 比對
+# 不上就整條丟掉、Definition 欄留空。實測一支 TED 影片 20 張卡有 6 張空白，
+# 其中 3 張是這個原因。
+
+def _entry_with_uro(hw, fl, shortdefs, ure, ure_fl):
+    return [{"hwi": {"hw": hw}, "fl": fl, "shortdef": shortdefs,
+             "uros": [{"ure": ure, "fl": ure_fl}]}]
+
+
+def test_run_on_derivative_is_found():
+    data = _entry_with_uro("hum*ble", "adjective", ["not proud"], "hum*bly", "adverb")
+    assert mine._find_run_on(data, "humbly") == ("humble", "adverb", ["not proud"])
+
+
+def test_run_on_lookup_ignores_unrelated_entries():
+    data = _entry_with_uro("hum*ble", "adjective", ["not proud"], "hum*bly", "adverb")
+    assert mine._find_run_on(data, "something-else") is None
+
+
+def test_fetch_definition_recovers_derivative_and_marks_its_origin(monkeypatch):
+    """定義只能用母詞的，所以要標明來源——否則會出現詞性與內容打架：
+    vulnerability 標 noun，定義文字卻是形容詞的 "easily hurt or harmed"。"""
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: _entry_with_uro(
+        "vul*ner*a*ble", "adjective", ["easily hurt or harmed"],
+        "vul*ner*a*bil*i*ty", "noun"))
+    out = mine.fetch_definition("vulnerability", sentence="This requires vulnerability.",
+                                surface="vulnerability")
+    assert "<i>noun</i>" in out              # 詞性用衍生詞自己的
+    assert "vulnerable" in out               # 但標明定義是誰的
+    assert "easily hurt or harmed" in out
+    assert "nodef" not in mine.LAST_FLAGS    # 救回來了就不算查無
+
+
+def test_genuinely_missing_word_is_flagged(monkeypatch):
+    """字典真的沒收、也不是任何詞條的衍生詞——Definition 會是空的，要留下痕跡。"""
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: [])
+    assert mine.fetch_definition("aneurysm", sentence="She had an aneurysm.",
+                                 surface="aneurysm") == ""
+    assert "nodef" in mine.LAST_FLAGS
+
+
+def test_missing_api_key_is_not_flagged_as_missing_definition(monkeypatch):
+    """沒設金鑰是使用者的設定問題，不是這個字查不到，不該打 no-definition。"""
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "")
+    assert mine.fetch_definition("anything", sentence="A sentence.") == ""
+    assert mine.LAST_FLAGS == set()
+
+
+def test_lookup_result_is_accessed_by_name(monkeypatch):
+    """查詢結果用具名欄位存取，不靠位置解包。
+
+    這個函式先前從回傳 2 個值改成 3 個，散在各處的位置解包沒有全部跟上——
+    tools/backfill_tags.py 漏改了，一跑就 ValueError，而當時的測試沒抓到。
+    """
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: [
+        {"hwi": {"hw": "happy"}, "fl": "adjective", "shortdef": ["feeling pleasure"]}])
+    r = mine._mw_lookup_with_fallback("learners", "dummy", "happy")
+    assert r.homographs and r.matched_word == "happy" and r.raw
+
+
+def test_backfill_tool_works_with_the_lookup_result(monkeypatch):
+    """repo 內另一個呼叫端：確保它跟著新的回傳形狀走。"""
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location(
+        "backfill_tags", pathlib.Path(__file__).parent.parent / "tools" / "backfill_tags.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: [
+        {"hwi": {"hw": "widget"}, "fl": "noun", "shortdef": ["a small gadget", "a whatsit"]}])
+    flags, definition = mod.analyse("widget", "Hold on, let me check that.", "widget")
+    assert "a small gadget" in definition
+    assert "sense" in flags
+
+
+def test_synonyms_path_unpacks_correctly(monkeypatch):
+    """實際走一次 fetch_synonyms，確認解包不會炸。"""
+    monkeypatch.setattr(mine, "MW_THESAURUS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: [
+        {"meta": {"id": "happy", "syns": [["glad", "joyful"]], "ants": [["sad"]]},
+         "fl": "adjective", "shortdef": ["feeling pleasure"]}])
+    out = mine.fetch_synonyms("happy", sentence="I am happy today.", surface="happy")
+    assert "glad" in out
+
+
+# ---------- 衍生詞救回的界線 ----------
+#
+# 母詞定義並非總能套到衍生詞上。界線是「會讀錯的擋掉，只是需要轉換的保留」。
+
+def _uro_entry(hw, base_fl, shortdefs, ure, ure_fl):
+    return [{"hwi": {"hw": hw}, "fl": base_fl, "shortdef": shortdefs,
+             "uros": [{"ure": ure, "fl": ure_fl}]}]
+
+
+@pytest.mark.parametrize("hw,base_fl,ure,ure_fl", [
+    ("hum*ble", "adjective", "hum*bly", "adverb"),           # 形容詞→副詞，直接套用就通
+    ("vul*ner*a*ble", "adjective", "vulnerability", "noun"), # 形容詞→名詞
+    ("ev*o*lu*tion", "noun", "evolutionary", "adjective"),   # 名詞→形容詞，讀者自行轉換
+])
+def test_transferable_relations_are_recovered(hw, base_fl, ure, ure_fl):
+    data = _uro_entry(hw, base_fl, ["some definition"], ure, ure_fl)
+    assert mine._find_run_on(data, ure.replace("*", "")) is not None
+
+
+def test_verb_root_is_rejected_for_non_verb_derivative():
+    """動詞定義寫成「to do X」，套到名詞上語法就不成句。
+
+    實例：masturbate 的 "to touch or rub..." 掛在 masturbation 上。
+    """
+    data = _uro_entry("en*joy", "verb", ["to take pleasure in (something)"],
+                      "en*joy*able", "adjective")
+    assert mine._find_run_on(data, "enjoyable") is None
+
+
+def test_agent_noun_derivative_is_rejected():
+    """指人的衍生詞會拿到「事物或行為」的定義，語意直接錯掉。
+
+    psychotherapist 拿到的是 psychotherapy 的「用談話治療心理疾病」——那是療法。
+    單看詞性擋不掉，兩邊都是名詞。
+    """
+    data = _uro_entry("psy*cho*ther*a*py", "noun",
+                      ["treatment of mental illness by talking about problems"],
+                      "psy*cho*ther*a*pist", "noun")
+    assert mine._find_run_on(data, "psychotherapist") is None
+
+
+def test_agent_rule_catches_roots_that_also_end_in_er():
+    """母詞自己也以 -er 結尾時規則仍要生效（gather → gatherer）。"""
+    data = _uro_entry("gath*er", "verb", ["to bring things together"],
+                      "gath*er*er", "noun")
+    assert mine._find_run_on(data, "gatherer") is None
+
+
+def test_ambiguous_run_on_is_rejected():
+    """同一個衍生詞掛在兩個不同母詞底下時放棄——分不出該用哪一個。"""
+    data = (_uro_entry("aaa", "adjective", ["first meaning"], "shared*ly", "adverb")
+            + _uro_entry("bbb", "adjective", ["second meaning"], "shared*ly", "adverb"))
+    assert mine._find_run_on(data, "sharedly") is None
+
+
+def test_lookup_failure_is_distinguished_from_missing_word(monkeypatch):
+    """查詢失敗與「字典沒收」都會讓 Definition 空白，但要分得出來——
+    前者重跑就會有，後者重跑幾次都不會有。"""
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+
+    def boom(ref, key, w):
+        raise RuntimeError("HTTP Error 429: Too Many Requests")
+
+    monkeypatch.setattr(mine, "_mw_get", boom)
+    assert mine.fetch_definition("whatever", sentence="A sentence.") == ""
+    assert mine.LAST_FLAGS == {"lookupfail"}
+    assert mine.UNCERTAIN_TAG["lookupfail"] == "definition-lookup-failed"
+
+
+def test_nodef_reaches_the_note_tags(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_invoke(action, **kw):
+        if action == "canAddNotes":
+            return [True]
+        if action == "addNote":
+            seen["tags"] = kw["note"]["tags"]
+            return 1
+
+    monkeypatch.setattr(mine, "invoke", fake_invoke)
+    monkeypatch.setattr(mine, "extract_audio", lambda *a, **k: None)
+    monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
+    monkeypatch.setattr(mine, "store", lambda p, f: None)
+    monkeypatch.setattr(mine, "fetch_synonyms", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_chinese", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "MEDIA_DIR", str(tmp_path))
+    monkeypatch.setattr(mine, "fetch_definition",
+                        lambda *a, **k: (mine.LAST_FLAGS.clear(),
+                                         mine.LAST_FLAGS.add("nodef"), "")[2])
+    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
+    mine.add_card("vid", "v.mp4", sent, "aneurysm", "t")
+    assert "no-definition" in seen["tags"]

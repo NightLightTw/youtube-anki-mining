@@ -71,9 +71,13 @@ def analyse(word, sentence, surface):
     刻意不走 fetch_definition()——它會吞掉查詢例外回傳空字串，那會讓額度用盡與
     「這個字查無定義」變得無法區分。這裡讓例外往上拋。
     """
-    homographs, _ = mine._mw_lookup_with_fallback("learners", mine.MW_LEARNERS_KEY, word)
+    found = mine._mw_lookup_with_fallback("learners", mine.MW_LEARNERS_KEY, word)
+    homographs = found.homographs
     if not homographs:
-        return frozenset(), ""          # 字典真的沒有這個字（查詢本身成功了）
+        # 可能是衍生詞（掛在母詞的 uros 底下），管線現在會用母詞定義救回
+        if mine._find_run_on(found.raw, word):
+            return frozenset(), ""      # 救得回來，不算不確定
+        return frozenset({"nodef"}), ""  # 字典真的沒有這個字（查詢本身成功了）
     wanted_pos = mine._guess_pos(surface or word, sentence) if sentence else None
     flags = set()
     if mine._entry_is_a_guess(homographs, wanted_pos):
