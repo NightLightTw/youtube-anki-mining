@@ -140,8 +140,13 @@ SRT="media/${VIDEO_ID}.en.srt"
 # [ ! -s "$SRT" ] 判斷為 false 而漏掉 rename、悄悄用到過期字幕（重跑同一支影片
 # 卻拿到舊內容，且不會有任何錯誤訊息，非常隱蔽）。
 rm -f "media/${VIDEO_ID}".en*.srt
+# 不因為 yt-dlp 回傳非零就中斷：一支影片常有多個英文變體（en / en-orig / en-uk），
+# 抓到其中一個就夠用了，但只要有任何一個變體失敗（實測 YouTube 會對密集請求回
+# HTTP 429），yt-dlp 整體就是非零退出。真正該判斷成敗的是「拿到英文字幕了沒」，
+# 由下面的檔案檢查負責。
 "$YTDLP" --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs \
-  --sub-lang "$EN_LANGS" --sub-format srt --convert-subs srt -o "media/%(id)s.%(ext)s" "$URL"
+  --sub-lang "$EN_LANGS" --sub-format srt --convert-subs srt -o "media/%(id)s.%(ext)s" "$URL" \
+  || echo "  （部分字幕變體下載失敗，只要主字幕有抓到就繼續）" >&2
 if [ ! -s "$SRT" ]; then
   FOUND_SRT=$(ls "media/${VIDEO_ID}".en*.srt 2>/dev/null | head -1 || true)
   if [ -n "$FOUND_SRT" ]; then
