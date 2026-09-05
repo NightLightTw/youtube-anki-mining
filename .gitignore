@@ -17,3 +17,6 @@ YT_Mining_EN.apkg
 
 # 回溯標籤工具的進度檔（純本機狀態，內容是 Anki note id）
 tools/.backfill_tags_state.json
+
+# 本機的開發伺服器設定（含絕對路徑）
+.claude/launch.json
