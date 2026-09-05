@@ -56,6 +56,11 @@ LEMMA_OVERRIDES = {
     "slang": "slang",     # 誤還原成 sling
     "taxes": "tax",       # 誤還原成 taxis（計程車複數），導致整張卡查錯字
     "putting": "put",     # 誤還原成 putt（高爾夫推桿），導致 put down(存入) 誤判成高爾夫術語
+    # 不規則動詞的過去式與動名詞，simplemma 偶有漏網（同批的 drowned/wept/stung 都正確，
+    # 只有這幾個沒還原）。沒還原的話整張卡會以變化形建立，字典查無定義而留空——
+    # 實測 shook 與 drowning 都是這樣進到牌組裡的。
+    "shook": "shake",
+    "drowning": "drown",
     # 英式雙l動名詞系統性瑕疵：simplemma 對「-el/-am 結尾+雙l+ing」的英式拼法常還原
     # 錯誤，誤還原成「不存在的殘字」（travell/modell/cancell/labell/signall），比查錯字
     # 更糟——這些殘字會直接變成卡片上的目標字，讓學習者背一個不存在的英文字。

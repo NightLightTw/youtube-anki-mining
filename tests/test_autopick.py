@@ -3,6 +3,8 @@
 案例全部來自實際影片處理時踩過、修過的坑（詳見 git log 與 README「已知限制」），
 目的是讓未來修改不會讓這些已修復的行為悄悄退化。
 """
+import pytest
+
 from autopick import (
     _is_spelled_number,
     auto_select,
@@ -162,3 +164,16 @@ def test_auto_select_keeps_shortest_sentence_per_lemma():
                         min_zipf=0.0, max_zipf=8.0)
     assert len(picks) == 1
     assert picks[0]["sent"]["nwords"] == 6
+
+
+@pytest.mark.parametrize("surface,expected", [
+    ("shook", "shake"),        # 不規則過去式，simplemma 原樣回傳
+    ("drowning", "drown"),     # 動名詞，同批的 drowned 卻正確
+])
+def test_irregular_forms_are_normalised(surface, expected):
+    """沒還原的變化形會直接變成卡片上的目標字，而字典查不到那個形態、定義留空。
+
+    實測 shook 與 drowning 都是這樣進到牌組的；同一批的 drowned／wept／stung
+    simplemma 都還原正確，所以只能逐字補進覆寫表。
+    """
+    assert lemma(surface) == expected
