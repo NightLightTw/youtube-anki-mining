@@ -515,6 +515,102 @@ def _filter_homographs(data, word, from_thesaurus=False):
     return out
 
 
+def _hw_of(entry):
+    """取詞條的 headword（去掉 MW 用來標音節的星號）。"""
+    return re.sub(r"[*]", "", entry.get("hwi", {}).get("hw", ""))
+
+
+def _word_is_run_on(data, word):
+    """這個字是不是掛在某個詞條底下的衍生詞（uros）。
+
+    用來把「拼法變體」與「衍生詞」分開：兩者的 headword 都對不上查詢字，但只有
+    衍生詞需要 _find_run_on 那套詞性轉移的防護（psychotherapist 不能直接拿
+    psychotherapy 的定義）。實測 loneliness／psychotherapist／vulnerability 都在
+    uros 裡，axe／grey／colour／plough／organise 都不在，剛好切開。
+    """
+    target = word.lower()
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        for uro in entry.get("uros", []) or []:
+            if re.sub(r"[*]", "", uro.get("ure", "")).lower() == target:
+                return True
+    return False
+
+
+# MW 用 cxs 明示異體拼法：cxl 寫「chiefly British spelling of」，cxt 指向本體
+# headword。這是辭典自己的宣告，不是我們猜的，所以可以直接信。
+# 只認「拼法／變體」這層關係——cxs 也用來標 past tense of、plural of 這類屈折
+# 關係，那些跟著走會拿到錯的東西。不另外收「chiefly brit」當關鍵字：既有的
+# 「chiefly British spelling of」本來就含 spelling of，多收只會讓
+# 「chiefly British plural of」這類標籤也一起通過。
+_VARIANT_CXL = ("spelling of", "variant of")
+
+# 只有這幾種「查詢字 = headword + 字尾」算拼法／變化形，其餘一律當成衍生詞擋掉。
+# 這條是必要的：MW 的 meta.stems 比想像中寬鬆——influence 的 stems 收了
+# influencer、multi- 的 stems 收了所有 multi 開頭的字。實測不加這條會救回 2 個、
+# 同時救錯 2 個（influencer 拿到動詞 influence 的定義、multilevel 拿到 multi-
+# 的「many : much」），淨值是 0。
+_VARIANT_SUFFIXES = ("", "e", "s", "es")
+
+# 詞素不是完整的字，永遠不該拿來當某個字的詞條。MW 的詞素 headword 多半也帶連字號
+# （multi-），但另外檢查連字號是多餘的——實測拿掉那段檢查後測試全綠，這裡已經擋掉了。
+_NON_WORD_FL = {"combining form", "prefix", "suffix"}
+
+
+def _cross_reference_targets(data, word):
+    """同名但沒有釋義的轉指詞條，回傳它指向的本體 headword（可能不只一個）。
+
+    grey／colour／plough 在 MW 都有同名詞條，但只是個空殼（沒有 fl 與 shortdef），
+    cxs 才寫著真正的去處。headword 比對會命中空殼並就此停下，Definition 留空。
+
+    回傳全部候選而非第一個：第一個 cxt 在這份回應裡不一定有帶釋義的詞條，只認它
+    的話後面可用的候選就永遠試不到。
+    """
+    target = word.lower()
+    out = []
+    for entry in data:
+        if not isinstance(entry, dict) or entry.get("shortdef"):
+            continue
+        if _hw_of(entry).lower() != target:
+            continue
+        for cx in entry.get("cxs", []) or []:
+            label = (cx.get("cxl") or "").lower()
+            if not any(k in label for k in _VARIANT_CXL):
+                continue
+            for cxti in cx.get("cxtis", []) or []:
+                if cxti.get("cxt") and cxti["cxt"] not in out:
+                    out.append(cxti["cxt"])
+    return out
+
+
+def _filter_by_stems(data, word):
+    """headword 對不上時，用 MW 自己宣告的 meta.stems 找詞條。
+
+    只收「查詢字 = headword + _VARIANT_SUFFIXES 之一」的情況，處理 MW 用美式拼法
+    收錄而查詢字是異體的狀況（axe→ax），以及還原不掉的複數（millennials→
+    millennial）。同一份回應裡的 battle-ax 只在 stems 列 battle-axe、不含裸 axe，
+    自然擋掉——這正是 stems 比字串啟發式可靠的地方。
+    """
+    target = word.lower()
+    out = []
+    for entry in data:
+        if not isinstance(entry, dict) or not entry.get("shortdef"):
+            continue
+        if (entry.get("fl") or "").lower() in _NON_WORD_FL:
+            continue
+        hw = _hw_of(entry).lower()
+        if not hw:
+            continue
+        stems = [s.lower() for s in entry.get("meta", {}).get("stems", []) or []]
+        if target not in stems:
+            continue
+        if not any(target == hw + suffix for suffix in _VARIANT_SUFFIXES):
+            continue
+        out.append(entry)
+    return out
+
+
 # 查詢結果用具名欄位而非位置元組：這個函式先前從回傳 2 個值改成 3 個，散在各處的
 # 位置解包沒有全部跟上（實測 tools/backfill_tags.py 漏改，一跑就 ValueError），
 # 具名存取不會有這個問題。
@@ -530,6 +626,24 @@ def _mw_lookup_with_fallback(ref, key, word, from_thesaurus=False):
     """
     data = _mw_get(ref, key, word)
     homographs = _filter_homographs(data, word, from_thesaurus)
+    if any(e.get("shortdef") for e in homographs):
+        return MWLookup(homographs, word, data)
+    # 走到這裡有兩種情況，都能用 MW 自己的 meta.stems 救，且不必再打一次 API：
+    #   1. headword 完全對不上——axe 查到的是 ax:1／ax:2，先前整個被濾掉，定義留空。
+    #   2. 只對到沒有釋義的轉指詞條——grey／colour／plough 在 MW 有同名空殼詞條
+    #      （fl 與 shortdef 都沒有），只是指向美式拼法的本體。
+    # 但衍生詞不能走這條：psychotherapist 的 stems 會命中 psychotherapy，正是
+    # _find_run_on 的詞性防護要擋的情況，所以先用 uros 把衍生詞排除掉，讓它們
+    # 維持走原本的路徑。thesaurus 沒量過，暫不套用。
+    if not from_thesaurus and not _word_is_run_on(data, word):
+        for alt in _cross_reference_targets(data, word):
+            by_cx = [e for e in _filter_homographs(data, alt, from_thesaurus)
+                     if e.get("shortdef")]
+            if by_cx:
+                return MWLookup(by_cx, alt, data)
+        by_stems = _filter_by_stems(data, word)
+        if by_stems:
+            return MWLookup(by_stems, _hw_of(by_stems[0]) or word, data)
     if homographs:
         return MWLookup(homographs, word, data)
     for variant_fn in _SPELLING_VARIANTS:

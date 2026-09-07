@@ -869,3 +869,206 @@ def test_backfill_tool_has_no_hardcoded_flag_lists():
     for flag in mine.UNCERTAIN_TAG:
         assert flag in hits, f"統計容器少了旗標 {flag}"
         assert flag in mod.TAG, f"標籤對照表少了旗標 {flag}"
+
+# ---------- 拼法變體救援（meta.stems 與 cxs） ----------
+# MW 是美式辭典，查英式或異體拼法時 headword 完全對不上（axe→ax），或只對到一個
+# 沒有釋義的同名轉指詞條（grey→gray）。兩種情況先前都讓 Definition 留空。
+# 救援用 MW 自己的兩個欄位，不必多打一次 API——本體詞條本來就在同一份回應裡。
+#
+# 每道防護各寫一個「只有它擋得住」的案例：測試若能被其他條件擋下，就驗不到它。
+
+_AX_RESPONSE = [
+    {"meta": {"id": "ax:1", "stems": ["ax", "axe", "axes", "ax to grind"]},
+     "hwi": {"hw": "ax"}, "fl": "noun",
+     "shortdef": ["a tool that has a heavy metal blade and a long handle"]},
+    {"meta": {"id": "battle-ax", "stems": ["battle-ax", "battle-axe"]},
+     "hwi": {"hw": "bat*tle-ax"}, "fl": "noun",
+     "shortdef": ["an ax with a large blade that was used as a weapon"]},
+]
+
+
+def _stub_mw(monkeypatch, entries):
+    calls = []
+
+    def fake_get(ref, key, w):
+        calls.append(w)
+        return entries
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", fake_get)
+    return calls
+
+
+def test_spelling_variant_recovered_through_stems(monkeypatch):
+    """axe 在 MW 不是 headword，但 ax 的 stems 列了它——該拿得到 ax 的定義。"""
+    calls = _stub_mw(monkeypatch, _AX_RESPONSE)
+    d = mine.fetch_definition("axe", sentence="He swung the axe.", surface="axe")
+    assert "heavy metal blade" in d
+    assert mine.LAST_FLAGS == set()            # 不該留下 nodef 之類的痕跡
+    assert calls == ["axe"]                    # 救援不額外打 API
+
+
+def test_stems_recovery_does_not_grab_compound_words(monkeypatch):
+    """同一份回應裡的 battle-ax 只在 stems 列 battle-axe，不含裸 axe，不該被選中。
+
+    這正是 stems 比字串啟發式可靠的地方——擋掉與 pedal→soft-pedal 同類的誤抓。
+    """
+    _stub_mw(monkeypatch, _AX_RESPONSE)
+    d = mine.fetch_definition("axe", sentence="He swung the axe.", surface="axe")
+    assert "heavy metal blade" in d and "weapon" not in d
+
+
+def test_stems_recovery_accepts_regular_plural(monkeypatch):
+    """還原不掉的複數（millennials）也走這條——查詢字 = headword + s。"""
+    _stub_mw(monkeypatch, [
+        {"meta": {"id": "millennial:2", "stems": ["millennial", "millennials"]},
+         "hwi": {"hw": "millennial"}, "fl": "noun",
+         "shortdef": ["a person who was born in the 1980s or 1990s"]},
+    ])
+    assert "born in the 1980s" in mine.fetch_definition(
+        "millennials", sentence="Millennials grew up online.", surface="millennials")
+
+
+def test_stems_recovery_rejects_derivational_suffixes(monkeypatch):
+    """influence 的 stems 收了 influencer，但那是衍生詞，不是拼法變體。
+
+    實測用裸 stems 比對會讓 influencer 拿到動詞 influence 的定義——「影響某事物」
+    不是「網紅」。只允許 headword 加 e／s／es，就擋掉了。
+    """
+    _stub_mw(monkeypatch, [
+        {"meta": {"id": "influence:2",
+                  "stems": ["influence", "influenced", "influencer", "influencers"]},
+         "hwi": {"hw": "influence"}, "fl": "verb",
+         "shortdef": ["to affect or change (someone or something) in an indirect way"]},
+    ])
+    assert mine.fetch_definition("influencer", sentence="She is an influencer.",
+                                 surface="influencer") == ""
+    assert "nodef" in mine.LAST_FLAGS and "lookupfail" not in mine.LAST_FLAGS
+
+
+def test_stems_recovery_rejects_hyphenated_combining_forms(monkeypatch):
+    """multi- 的 stems 列出所有 multi 開頭的字，實測會讓 multilevel 拿到「many : much」。"""
+    _stub_mw(monkeypatch, [
+        {"meta": {"id": "multi-", "stems": ["multi-", "multilevel", "multiband"]},
+         "hwi": {"hw": "multi-"}, "fl": "combining form",
+         "shortdef": ["many : much"]},
+    ])
+    assert mine.fetch_definition("multilevel", sentence="A multilevel system.",
+                                 surface="multilevel") == ""
+    assert "nodef" in mine.LAST_FLAGS
+
+
+def test_word_type_exclusion_blocks_suffix_eligible_morphemes(monkeypatch):
+    """詞素不是完整的字，就算字尾剛好合格也不能拿來當某個字的詞條。
+
+    刻意讓這個候選通過字尾白名單（headword + s）與連字號檢查，這樣擋下它的就只剩
+    詞性排除——上面那個 multi- 的案例光靠字尾白名單就會被擋掉，驗不到這條。
+    """
+    _stub_mw(monkeypatch, [
+        {"meta": {"id": "cyber", "stems": ["cyber", "cybers"]},
+         "hwi": {"hw": "cyber"}, "fl": "combining form",
+         "shortdef": ["of or relating to computers"]},
+    ])
+    assert mine.fetch_definition("cybers", sentence="A word.", surface="cybers") == ""
+
+
+def test_run_on_gate_wins_over_a_suffix_eligible_stems_candidate(monkeypatch):
+    """字尾合格、但 MW 把它標成衍生詞（uros）時，仍要走 run-on 路徑。
+
+    刻意讓 glasses 通過字尾白名單（glass + es），這樣擋下 stems 那條的就只剩
+    uros 閘門——psychotherapist／loneliness 光靠字尾白名單就會被擋掉，驗不到它。
+    走 run-on 路徑的差別看得出來：定義前面會標「某字的衍生詞」。
+    """
+    _stub_mw(monkeypatch, [
+        {"meta": {"id": "glass", "stems": ["glass", "glasses"]},
+         "hwi": {"hw": "glass"}, "fl": "noun",
+         "shortdef": ["a hard transparent substance used for windows"],
+         "uros": [{"ure": "glass*es", "fl": "noun"}]},
+    ])
+    d = mine.fetch_definition("glasses", sentence="He wore glasses.", surface="glasses")
+    assert "glass 的衍生詞" in d
+
+
+def test_stems_recovery_leaves_agent_derivatives_empty(monkeypatch):
+    """psychotherapist 的 stems 會命中 psychotherapy，但那是「療法」不是「治療師」。"""
+    _stub_mw(monkeypatch, [
+        {"meta": {"id": "psychotherapy",
+                  "stems": ["psychotherapy", "psychotherapist", "psychotherapies"]},
+         "hwi": {"hw": "psy*cho*ther*a*py"}, "fl": "noun",
+         "shortdef": ["the treatment of mental illness by talking about problems"],
+         "uros": [{"ure": "psy*cho*ther*a*pist", "fl": "noun"}]},
+    ])
+    assert mine.fetch_definition(
+        "psychotherapist", sentence="She saw a psychotherapist.",
+        surface="psychotherapist") == ""
+    assert "nodef" in mine.LAST_FLAGS
+
+
+def test_transferable_derivatives_keep_their_label(monkeypatch):
+    """能轉移的衍生詞仍要保留「某字的衍生詞」標示，不被救援路徑搶走。"""
+    _stub_mw(monkeypatch, [
+        {"meta": {"id": "lonely", "stems": ["lonely", "loneliness", "lonelier"]},
+         "hwi": {"hw": "lone*ly"}, "fl": "adjective",
+         "shortdef": ["sad from being apart from other people"],
+         "uros": [{"ure": "lone*li*ness", "fl": "noun"}]},
+    ])
+    assert "lonely 的衍生詞" in mine.fetch_definition(
+        "loneliness", sentence="That loneliness is the price.", surface="loneliness")
+
+
+# ---------- cxs 轉指 ----------
+def _grey_shell(cxl="chiefly British spelling of", targets=("gray",)):
+    return {"meta": {"id": "grey", "stems": ["grey", "gray"]}, "hwi": {"hw": "grey"},
+            "cxs": [{"cxl": cxl, "cxtis": [{"cxt": t} for t in targets]}]}
+
+
+_GRAY_ENTRY = {"meta": {"id": "gray:1", "stems": ["gray", "grey", "grays"]},
+               "hwi": {"hw": "gray"}, "fl": "adjective",
+               "shortdef": ["having a color between black and white"]}
+
+
+def test_definitionless_cross_reference_entry_is_followed(monkeypatch):
+    """grey 在 MW 只有個沒有 fl／shortdef 的空殼，cxs 才寫著去處。
+
+    headword 比對會命中空殼並就此停下，Definition 留空。cxs 是 MW 自己標的
+    「chiefly British spelling of gray」，跟著它走就對了。
+    """
+    calls = _stub_mw(monkeypatch, [_grey_shell(), _GRAY_ENTRY])
+    assert "between black and white" in mine.fetch_definition(
+        "grey", sentence="The sky was grey.", surface="grey")
+    assert calls == ["grey"]
+
+
+def test_variant_of_label_is_followed(monkeypatch):
+    """另一種寫法：variant of。"""
+    _stub_mw(monkeypatch, [_grey_shell(cxl="variant of"), _GRAY_ENTRY])
+    assert "between black and white" in mine.fetch_definition(
+        "grey", sentence="The sky was grey.", surface="grey")
+
+
+@pytest.mark.parametrize("cxl", [
+    "past tense of",
+    "plural of",
+    "chiefly British plural of",   # 含「chiefly British」但關係不是拼法
+])
+def test_non_variant_cross_reference_labels_are_not_followed(monkeypatch, cxl):
+    """cxs 也用來標屈折關係，跟著走會拿到錯的東西——只認拼法／變體那層。"""
+    _stub_mw(monkeypatch, [_grey_shell(cxl=cxl), _GRAY_ENTRY])
+    assert mine.fetch_definition("grey", sentence="The sky was grey.",
+                                 surface="grey") == ""
+
+
+def test_later_cross_reference_target_is_tried(monkeypatch):
+    """第一個 cxt 在這份回應裡沒有帶釋義的詞條時，要繼續試後面的候選。"""
+    _stub_mw(monkeypatch, [
+        _grey_shell(targets=("greyhound", "gray")), _GRAY_ENTRY])
+    assert "between black and white" in mine.fetch_definition(
+        "grey", sentence="The sky was grey.", surface="grey")
+
+
+def test_entry_without_shortdef_and_no_recovery_still_reports_nodef(monkeypatch):
+    """詞條存在但沒有簡明釋義、又無處可救時，仍要留下 nodef 痕跡。"""
+    _stub_mw(monkeypatch, [
+        {"meta": {"id": "grey", "stems": ["grey"]}, "hwi": {"hw": "grey"}}])
+    assert mine.fetch_definition("grey", sentence="The sky was grey.",
+                                 surface="grey") == ""
+    assert "nodef" in mine.LAST_FLAGS and "lookupfail" not in mine.LAST_FLAGS

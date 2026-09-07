@@ -289,6 +289,7 @@ cd /path/to/youtube-anki-mining
 3. **字典收錄有缺口** — Merriam-Webster 學習者字典查不到部分現代口語/慣用義（如 *dupe*=仿冒品、*chill*=放鬆的），英式拼法需備援轉換，少數字完全沒有詞條（實測牌組裡約 3%，多是 *influencer*、*microbiome*、*binge-watch* 這類較新的詞）。
    衍生詞（*humbly*、*vulnerability* 這類）字典是掛在母詞底下、不給獨立定義的，管線會改用母詞的定義並標明來源，例如「adverb（humble 的衍生詞）…」——這種情況下定義文字描述的是母詞，讀的時候要自己轉換。
    母詞定義套過去會讀錯的兩種情況會直接留空（打 `no-definition`）而不勉強套用：母詞是動詞、衍生詞不是（*enjoy* 的「to take pleasure in」掛在 *enjoyable* 上不成句），以及指人的衍生詞（*psychotherapist* 會拿到 *psychotherapy* 的「用談話治療心理疾病」，那是療法不是人）。
+   英式／異體拼法（*axe*、*grey*、*colour*、*plough*）在 MW 這本美式辭典裡 headword 對不上，或只對到一個沒有釋義的同名轉指詞條，先前都讓定義留空。管線會改用 MW 自己標的 `cxs`（「chiefly British spelling of gray」）與 `meta.stems` 找到本體，且只在同一份已取得的回應裡找，不多打 API。這條路徑刻意收得很窄——只認「查詢字 = headword 加上 e／s／es」，因為 `meta.stems` 比看起來寬鬆得多（*influence* 的 stems 收了 *influencer*、*multi-* 的 stems 收了所有 multi 開頭的字），放寬會讓 *influencer* 拿到動詞 *influence* 的定義。
 4. **繁中釋義偶爾對不上英文定義** — Google 翻譯即使有英文定義當語境提示，仍可能給出字面直翻或語域錯誤的翻譯。
 5. **自動字幕品質限制** — 口吃斷詞、連字號黏字、拼寫數字已有過濾器擋掉常見型態，但無法窮舉；完全沒有標點的自動字幕無法斷句，目前不支援。
 6. **人工字幕影片的音檔切點可能不準** — 見下一節。
