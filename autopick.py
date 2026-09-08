@@ -55,6 +55,11 @@ _lemma_cache = {}
 LEMMA_OVERRIDES = {
     "slang": "slang",     # 誤還原成 sling
     "taxes": "tax",       # 誤還原成 taxis（計程車複數），導致整張卡查錯字
+    # 同型：-es 複數只被剝掉一個 s，剩下的殘字剛好是個罕見真字，因此躲過詞頻篩選
+    # 而變成卡片上的目標字。實測 "obviously crosses a line" 建出了一張 Word=crosse
+    # 的卡（crosse 是長曲棍球棒，zipf 2.89），定義查無、中文欄變成音譯「克羅斯」。
+    # 還原正確的話這張卡根本不會存在：zipf('cross')=5.0，超過 4.2 的頻率上限。
+    "crosses": "cross",
     "putting": "put",     # 誤還原成 putt（高爾夫推桿），導致 put down(存入) 誤判成高爾夫術語
     # 不規則動詞的過去式與動名詞，simplemma 偶有漏網（同批的 drowned/wept/stung 都正確，
     # 只有這幾個沒還原）。沒還原的話整張卡會以變化形建立，字典查無定義而留空——

@@ -5,6 +5,8 @@
 """
 import pytest
 
+import autopick
+
 from autopick import (
     _is_spelled_number,
     auto_select,
@@ -177,3 +179,24 @@ def test_irregular_forms_are_normalised(surface, expected):
     simplemma 都還原正確，所以只能逐字補進覆寫表。
     """
     assert lemma(surface) == expected
+
+
+def test_third_person_verb_is_not_stripped_to_a_rare_real_word():
+    """-es 只被剝掉一個 s 時，殘字有時剛好是個罕見真字，會躲過詞頻篩選。
+
+    這比還原成「不存在的字」更難發現：crosse 查得到（是長曲棍球棒），只是跟句子
+    裡的動詞 cross 完全無關。
+    """
+    assert lemma("crosses") == "cross"
+
+
+def test_the_crosse_card_would_not_be_created_now():
+    """真正的症狀在下游：錯誤的還原結果會躲過詞頻上限，變成一張卡。
+
+    zipf('crosse')=2.89 落在挑字區間內，所以當初建出了 Word=crosse 的卡（定義查無、
+    中文欄變成音譯）。還原正確後 zipf('cross')=5.0 超過 MAX_ZIPF，這個字會被濾掉。
+    """
+    picked = unknowns("but what we saw obviously crosses a line.",
+                      min_zipf=autopick.MIN_ZIPF, max_zipf=autopick.MAX_ZIPF)
+    assert "crosse" not in [lm for _, lm, _ in picked]
+    assert "cross" not in [lm for _, lm, _ in picked]
