@@ -289,9 +289,9 @@ cd /path/to/youtube-anki-mining
    注意**没被标记不代表就是对的**：管线「有把握地选错」的情况抓不到（实测样本里约每 3 个错误会漏掉 1 个）。
 2. **词形还原有错漏** — `simplemma` 会把部分词形变化还原坏，目前靠覆写表逐字修补。
 3. **字典收录有缺口** — Merriam-Webster 学习者字典查不到部分现代口语/惯用义（如 *dupe*=仿冒品、*chill*=放松的），英式拼法需备援转换，少数字完全没有词条（实测牌组里约 3%，多是 *influencer*、*microbiome*、*binge-watch* 这类较新的词）。
-   英式／异体拼法（*axe*、*grey*、*colour*、*plough*）在 MW 这本美式辞典里 headword 对不上，或只对到一个没有释义的同名转指词条，先前都让定义留空。管线会改用 MW 自己标的 `cxs`（“chiefly British spelling of gray”）与 `meta.stems` 找到本体，且只在同一份已取得的回应里找，不多打 API。这条路径刻意收得很窄——只认“查询字 = headword 加上 e／s／es”，因为 `meta.stems` 比看起来宽松得多（*influence* 的 stems 收了 *influencer*、*multi-* 的 stems 收了所有 multi 开头的字），放宽会让 *influencer* 拿到动词 *influence* 的定义。
    衍生词（*humbly*、*vulnerability* 这类）字典是挂在母词底下、不给独立定义的，管线会改用母词的定义并标明来源，例如「adverb（humble 的衍生词）…」——这种情况下定义文字描述的是母词，读的时候要自己转换。
    母词定义套过去会读错的两种情况会直接留空（打 `no-definition`）而不勉强套用：母词是动词、衍生词不是（*enjoy* 的「to take pleasure in」挂在 *enjoyable* 上不成句），以及指人的衍生词（*psychotherapist* 会拿到 *psychotherapy* 的「用谈话治疗心理疾病」，那是疗法不是人）。
+   英式／异体拼法（*axe*、*grey*、*colour*、*plough*）在 MW 这本美式辞典里 headword 对不上，或只对到一个没有释义的同名转指词条，先前都让定义留空。管线会改用 MW 自己标的 `cxs`（「chiefly British spelling of gray」）与 `meta.stems` 找到本体，且只在同一份已取得的回应里找，不多打 API。这条路径刻意收得很窄——只认「查找字 = headword 加上 e／s／es」，因为 `meta.stems` 比看起来宽松得多（*influence* 的 stems 收了 *influencer*、*multi-* 的 stems 收了所有 multi 开头的字），放宽会让 *influencer* 拿到动词 *influence* 的定义。
 4. **繁中释义偶尔对不上英文定义** — Google 翻译即使有英文定义当语境提示，仍可能给出字面直翻或语域错误的翻译。
 5. **自动字幕品质限制** — 口吃断词、连字号黏字、拼写数字已有过滤器挡掉常见型态，但无法穷举；完全没有标点的自动字幕无法断句，目前不支持。
 6. **人工字幕视频的音档切点可能不准** — 见下一节。
