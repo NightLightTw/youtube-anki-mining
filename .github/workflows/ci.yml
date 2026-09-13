@@ -5,12 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+# 兩個 job 都只讀 repo 跑檢查，不寫回任何東西
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          # checkout 之後沒有任何 git 操作，不需要留著認證
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -24,8 +31,11 @@ jobs:
   readme-zh-cn-sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          # checkout 之後沒有任何 git 操作，不需要留著認證
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: Install OpenCC
