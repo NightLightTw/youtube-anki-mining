@@ -60,6 +60,15 @@ LEMMA_OVERRIDES = {
     # 的卡（crosse 是長曲棍球棒，zipf 2.89），定義查無、中文欄變成音譯「克羅斯」。
     # 還原正確的話這張卡根本不會存在：zipf('cross')=5.0，超過 4.2 的頻率上限。
     "crosses": "cross",
+    # crew 被還原成 crow——crew 確實是 crow(公雞啼叫) 的過去式，MW 標為 chiefly
+    # British（英式用法，不是古英文），simplemma 照字典收了這個對應。實測《白鯨記》
+    # 那支影片的 "that's when the crew learns the real plan" 因此建出一張 Word=crow
+    # 的卡，卡面的字根本沒出現在句子裡。還原正確的話這張卡不會存在：zipf('crew')=4.70
+    # 超過 4.2 上限，是 zipf('crow')=3.80 落在區間內才鑽進來。
+    # 依檔案開頭的規則，crew 是合法的獨立名詞，覆寫成原始拼寫本身而非縮並到 crow。
+    # 取捨與 bussed 同類：真的在講「公雞啼了」時這個覆寫會還原不到 crow，但那個用法
+    # 在現代英文極罕見，而「船員」幾乎是唯一會出現在字幕裡的意思。
+    "crew": "crew",
     "putting": "put",     # 誤還原成 putt（高爾夫推桿），導致 put down(存入) 誤判成高爾夫術語
     # 不規則動詞的過去式與動名詞，simplemma 偶有漏網（同批的 drowned/wept/stung 都正確，
     # 只有這幾個沒還原）。沒還原的話整張卡會以變化形建立，字典查無定義而留空——

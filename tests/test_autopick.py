@@ -200,3 +200,31 @@ def test_the_crosse_card_would_not_be_created_now():
                       min_zipf=autopick.MIN_ZIPF, max_zipf=autopick.MAX_ZIPF)
     assert "crosse" not in [lm for _, lm, _ in picked]
     assert "cross" not in [lm for _, lm, _ in picked]
+
+
+def test_british_past_tense_is_not_collapsed_to_its_base_verb():
+    """crew 是 crow(公雞啼叫) 的過去式（MW 標 chiefly British），會被還原成 crow。
+
+    現代英文裡 crew 幾乎只當「船員」解，縮並過去會讓卡片的目標字根本沒出現在句子裡
+    ——實測 "that's when the crew learns the real plan" 建出了 Word=crow 的卡。
+    """
+    assert lemma("crew") == "crew"
+
+
+def test_the_crow_card_would_not_be_created_now():
+    """真正的症狀在下游：crew 的詞頻本來就超過上限，錯誤的還原讓它鑽過篩選。"""
+    picked = unknowns("and that's when the crew learns the real plan.",
+                      min_zipf=autopick.MIN_ZIPF, max_zipf=autopick.MAX_ZIPF)
+    assert "crow" not in [lm for _, lm, _ in picked]
+    assert "crew" not in [lm for _, lm, _ in picked]
+
+
+def test_crew_is_excluded_by_frequency_not_by_being_dropped():
+    """把頻率帶開到最寬時，crew 要以自己的身分出現。
+
+    上面那個測試只驗「挑不到」，但「整個 token 被丟掉」也會讓它通過。這一條確認
+    crew 仍被當成一個正常的字看待，只是詞頻超過上限才落選——日後若有人改動 token
+    過濾邏輯而誤殺 crew，上面那條抓不到，這條會。
+    """
+    got = unknowns("and that's when the crew learns the real plan.")
+    assert ("crew", "crew") in [(s, lm) for s, lm, _ in got]
