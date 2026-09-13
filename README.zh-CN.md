@@ -24,7 +24,7 @@
 
 </details>
 
-## ✨ 内核特色
+## ✨ 核心特色
 
 - **一键全自动**：`./run.sh "YouTube网址"`，下载字幕视频 → 挑生字 → 制卡 → 同步 AnkiWeb 一次跑完
 - **聪明挑字**：自动排除你 Anki 牌组里已有的字，用词频锁定「该学但还不会」的区间，只挑语境干净的例句
@@ -59,7 +59,7 @@
 
 适合对象：用 Anki 背单词、常看英文 YouTube（需有英文 CC 字幕）、想把「看过的视频」变成「复习素材」的中文用户。
 
-> 在 macOS（Apple Silicon）上开发与测试。一键脚本 `run.sh` 依赖 macOS 指令（如 `open -a Anki`）；内核 Python 管线理论上跨平台，但未在 Windows/Linux 验证。
+> 在 macOS（Apple Silicon）上开发与测试。一键脚本 `run.sh` 依赖 macOS 指令（如 `open -a Anki`）；核心 Python 管线理论上跨平台，但未在 Windows/Linux 验证。
 
 ---
 
@@ -74,7 +74,7 @@
 | AnkiConnect add-on（免费） | 让脚本能对 Anki 送卡，安装见下方 |
 | Python 3.10+ | 运行管线 |
 | Git（macOS 通常已内置） | 下载本项目；不想装也可从 GitHub 页面「Code → Download ZIP」取得 |
-| ffmpeg（`brew install ffmpeg`） | 从视频切出句辅音档 |
+| ffmpeg（`brew install ffmpeg`） | 从视频切出句子音档 |
 
 **建议**（没有也能跑，但卡片品质差很多）：
 
