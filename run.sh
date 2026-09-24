@@ -139,28 +139,65 @@ SRT="media/${VIDEO_ID}.en.srt"
 # 保證等一下抓完後 glob 到的一定是這次剛下載的新檔，不會因為舊檔已存在、
 # [ ! -s "$SRT" ] 判斷為 false 而漏掉 rename、悄悄用到過期字幕（重跑同一支影片
 # 卻拿到舊內容，且不會有任何錯誤訊息，非常隱蔽）。
-rm -f "media/${VIDEO_ID}".en*.srt
-# 不因為 yt-dlp 回傳非零就中斷：一支影片常有多個英文變體（en / en-orig / en-uk），
-# 抓到其中一個就夠用了，但只要有任何一個變體失敗（實測 YouTube 會對密集請求回
-# HTTP 429），yt-dlp 整體就是非零退出。真正該判斷成敗的是「拿到英文字幕了沒」，
-# 由下面的檔案檢查負責。
-"$YTDLP" --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs \
+# .vtt 一起清：轉檔失敗時會留下 .vtt 而沒有 .srt，下面的失敗診斷靠它判斷，
+# 不能讓先前殘留的 .vtt 造成誤判。
+rm -f "media/${VIDEO_ID}".en*.srt "media/${VIDEO_ID}".en*.vtt
+# 一支影片常有多個英文變體（en / en-orig / en-uk），任何一條產生非空的 .srt 就能
+# 製卡。成敗一律由下面的檔案檢查判斷，不看 yt-dlp 的退出碼。
+# --ignore-errors 不能省：yt-dlp 預設（only_download）遇到第一條字幕下載失敗就
+# 拋錯中止這支影片，排在後面的變體根本不會去抓。實測 pMXjmzTV-Jk 的 en 回 429，
+# 可以正常下載的 en-orig 因此沒被嘗試，整支失敗。加了才會記警告、繼續抓下一條
+# （行為契約見 tests/test_ytdlp_contract.py）。
+# 這次呼叫不加 --no-warnings、stderr 另存：加了 -i 之後字幕下載失敗只會記成
+# warning，--no-warnings 會把它整個吃掉，失敗時就看不出是 429 還是真的沒字幕。
+SUB_ERR_LOG=$(mktemp "${TMPDIR:-/tmp}/ytm-subs.XXXXXX")
+"$YTDLP" --no-playlist --ignore-errors --skip-download --write-subs --write-auto-subs \
   --sub-lang "$EN_LANGS" --sub-format srt --convert-subs srt -o "media/%(id)s.%(ext)s" "$URL" \
-  || echo "  （部分字幕變體下載失敗，只要主字幕有抓到就繼續）" >&2
+  2>"$SUB_ERR_LOG" || true
 if [ ! -s "$SRT" ]; then
-  FOUND_SRT=$(ls "media/${VIDEO_ID}".en*.srt 2>/dev/null | head -1 || true)
-  if [ -n "$FOUND_SRT" ]; then
-    mv "$FOUND_SRT" "$SRT"
-  fi
+  # 略過空檔：某一條變體可能只產生空檔，要挑第一個「非空」的，不是第一個存在的。
+  for CAND in "media/${VIDEO_ID}".en*.srt; do
+    if [ -s "$CAND" ]; then
+      mv "$CAND" "$SRT"
+      break
+    fi
+  done
 fi
 if [ ! -s "$SRT" ]; then
-  echo "✗ 找不到英文字幕檔：$SRT" >&2
-  echo "  這支影片可能沒有英文字幕（人工或自動皆無），無法用本工具製卡。" >&2
-  echo "  若確定有英文字幕，可能是語言標籤不在預期清單內。用下列指令查看實際標籤，" >&2
-  echo "  再把它加進 run.sh 的 EN_LANGS：" >&2
-  echo "    yt-dlp --list-subs \"$URL\"" >&2
+  echo "✗ 沒有取得可用的英文字幕（$SRT）" >&2
+  # 限流與轉檔失敗可能同時發生（例如 en 被 429、en-orig 下載到了卻轉檔失敗），
+  # 各自獨立判斷、兩個都印，不讓其中一個蓋掉另一個。
+  DIAGNOSED=0
+  if grep -q "HTTP Error 429" "$SUB_ERR_LOG"; then
+    echo "  至少一條字幕被 YouTube 限流（HTTP 429，請求太多）。" >&2
+    echo "  等幾分鐘再重跑，或換一個網路出口（例如切換 VPN）。" >&2
+    DIAGNOSED=1
+  fi
+  if ls "media/${VIDEO_ID}".en*.vtt >/dev/null 2>&1; then
+    echo "  有英文字幕下載到，但轉成 SRT 失敗（留下了 .vtt）。請確認 ffmpeg 可以正常執行。" >&2
+    DIAGNOSED=1
+  fi
+  if [ "$DIAGNOSED" -eq 0 ]; then
+    echo "  這支影片可能沒有英文字幕（人工或自動皆無），無法用本工具製卡。" >&2
+    echo "  若確定有英文字幕，可能是語言標籤不在預期清單內。用下列指令查看實際標籤，" >&2
+    echo "  再把它加進 run.sh 的 EN_LANGS：" >&2
+    echo "    yt-dlp --list-subs \"$URL\"" >&2
+  fi
+  if grep -qE "ERROR|WARNING" "$SUB_ERR_LOG"; then
+    echo "  yt-dlp 的原始訊息：" >&2
+    grep -E "ERROR|WARNING" "$SUB_ERR_LOG" | tail -5 | sed 's/^/    /' >&2
+  fi
+  rm -f "$SUB_ERR_LOG"
   exit 1
 fi
+# 成功時也把 yt-dlp 的警告印出來：例如 en 被 429、改用 en-orig 成功，
+# 使用者應該知道這次拿到的是哪一條、為什麼。
+# 只挑字幕下載失敗那一類，其他無關的 yt-dlp 警告不要被誤稱成字幕失敗。
+if grep -q "Unable to download video subtitles" "$SUB_ERR_LOG"; then
+  echo "  （部分字幕變體沒有下載成功，已改用其他英文字幕）" >&2
+  grep "Unable to download video subtitles" "$SUB_ERR_LOG" | tail -5 | sed 's/^/    /' >&2
+fi
+rm -f "$SUB_ERR_LOG"
 
 # 4.5) 另外抓一份 json3 自動字幕：它每個字都帶時間戳(tOffsetMs)，是 ASR 的實際
 #      對齊結果。SRT 只有整段時間、句子邊界得線性內插猜（實測誤差可達 2.6 秒），
@@ -169,7 +206,7 @@ fi
 step "下載逐字時間戳 (json3，可選)"
 JSON3="media/${VIDEO_ID}.en.json3"
 rm -f "media/${VIDEO_ID}".en*.json3   # 同上，避免悄悄用到重跑前的舊逐字時間戳
-"$YTDLP" --no-warnings --no-playlist --skip-download --write-auto-subs \
+"$YTDLP" --no-warnings --no-playlist --ignore-errors --skip-download --write-auto-subs \
   --sub-lang "$EN_LANGS" --sub-format json3 -o "media/%(id)s.%(ext)s" "$URL" >/dev/null 2>&1 || true
 if [ ! -s "$JSON3" ]; then
   FOUND_JSON3=$(ls "media/${VIDEO_ID}".en*.json3 2>/dev/null | head -1 || true)
