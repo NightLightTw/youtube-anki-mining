@@ -69,6 +69,12 @@ LEMMA_OVERRIDES = {
     # 取捨與 bussed 同類：真的在講「公雞啼了」時這個覆寫會還原不到 crow，但那個用法
     # 在現代英文極罕見，而「船員」幾乎是唯一會出現在字幕裡的意思。
     "crew": "crew",
+    # 同型：wedding 被還原成 wed（複數 weddings 反而正確還原成 wedding）。實測《少年
+    # 維特的煩惱》那支影片的 "they're already planning a wedding" 建出了 Word=wed 的
+    # 卡。zipf('wedding')=4.83 超過上限，是 zipf('wed')=3.66 落在區間內才鑽進來。
+    # 取捨同 crew：真的用 wed 的現在分詞（"she is wedding him"）時會還原不到 wed，
+    # 但那個用法極罕見，字幕裡的 wedding 幾乎都是名詞「婚禮」。
+    "wedding": "wedding",
     "putting": "put",     # 誤還原成 putt（高爾夫推桿），導致 put down(存入) 誤判成高爾夫術語
     # 不規則動詞的過去式與動名詞，simplemma 偶有漏網（同批的 drowned/wept/stung 都正確，
     # 只有這幾個沒還原）。沒還原的話整張卡會以變化形建立，字典查無定義而留空——

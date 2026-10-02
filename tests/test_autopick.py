@@ -228,3 +228,26 @@ def test_crew_is_excluded_by_frequency_not_by_being_dropped():
     """
     got = unknowns("and that's when the crew learns the real plan.")
     assert ("crew", "crew") in [(s, lm) for s, lm, _ in got]
+
+
+def test_wedding_is_not_collapsed_to_the_verb_wed():
+    """simplemma 把單數 wedding 還原成 wed，但複數 weddings 卻正確還原成 wedding。"""
+    assert lemma("wedding") == "wedding"
+    assert lemma("weddings") == "wedding"
+
+
+def test_the_wed_card_would_not_be_created_now():
+    """實測 "they're already planning a wedding" 建出了 Word=wed 的卡。
+
+    zipf('wedding')=4.83 超過 MAX_ZIPF，是錯誤還原成 zipf 3.66 的 wed 才鑽過篩選。
+    """
+    picked = unknowns("so, they're already planning a wedding.",
+                      min_zipf=autopick.MIN_ZIPF, max_zipf=autopick.MAX_ZIPF)
+    assert "wed" not in [lm for _, lm, _ in picked]
+    assert "wedding" not in [lm for _, lm, _ in picked]
+
+
+def test_wedding_is_excluded_by_frequency_not_by_being_dropped():
+    """同 crew：確認 wedding 仍被當成正常的字，只是詞頻超過上限才落選。"""
+    got = unknowns("so, they're already planning a wedding.")
+    assert ("wedding", "wedding") in [(s, lm) for s, lm, _ in got]
