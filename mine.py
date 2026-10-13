@@ -1094,8 +1094,14 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
     audio_fn, img_fn = f"{slug}.mp3", f"{slug}.jpg"
 
     # 預檢是否重複（第一欄 Word）：若重複就不切媒體、不查 API，避免留下孤兒媒體
+    # fields 必須讓卡片正面不是空白：新版 AnkiConnect 的 canAddNotes 在欄位與重複檢查
+    # 之後還會檢查這點。只填 Word 時正面（{{Sentence}}{{SentenceAudio}}）是空的，所有
+    # 字都會被回報成 False，管線就把整支影片 20 個候選全判成「已存在」，一張卡都沒建。
+    # 重複偵測只比對第一欄 Word（外掛 services.py），Sentence 在這裡只是用來通過空白
+    # 檢查，不影響結果。
     probe = {"deckName": DECK_NAME, "modelName": MODEL_NAME,
-             "fields": {"Word": html.escape(word)}, "options": {"allowDuplicate": False}}
+             "fields": {"Word": html.escape(word), "Sentence": html.escape(sent["text"])},
+             "options": {"allowDuplicate": False}}
     if not invoke("canAddNotes", notes=[probe])[0]:
         print(f"  ↷ 跳過（已存在）：{word}")
         return None

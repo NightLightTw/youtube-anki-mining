@@ -1072,3 +1072,61 @@ def test_entry_without_shortdef_and_no_recovery_still_reports_nodef(monkeypatch)
     assert mine.fetch_definition("grey", sentence="The sky was grey.",
                                  surface="grey") == ""
     assert "nodef" in mine.LAST_FLAGS and "lookupfail" not in mine.LAST_FLAGS
+
+
+# ---- 重複預檢必須通過 AnkiConnect 的「空白卡面」檢查 ----
+
+def _picky_anki(existing_words):
+    """模擬新版 AnkiConnect 的 canAddNotes：卡面正面是空白就一律回 False（不管有沒有重複）。
+
+    正面模板是 {{Sentence}}{{SentenceAudio}}，所以 Sentence 與 SentenceAudio 兩欄都空
+    的 note 會被擋下——這正是更新 AnkiConnect 後，所有字都被回報成「已存在」的原因。
+    """
+    seen = {"probes": []}
+
+    def fake_invoke(action, **kw):
+        if action == "canAddNotes":
+            fields = kw["notes"][0]["fields"]
+            seen["probes"].append(fields)
+            front_empty = not (fields.get("Sentence") or fields.get("SentenceAudio"))
+            if front_empty:
+                return [False]
+            return [fields.get("Word") not in existing_words]
+        if action == "addNote":
+            seen["added"] = kw["note"]["fields"]["Word"]
+            return 1
+        return None
+
+    return fake_invoke, seen
+
+
+def _stub_card_pipeline(monkeypatch, tmp_path):
+    monkeypatch.setattr(mine, "extract_audio", lambda *a, **k: None)
+    monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
+    monkeypatch.setattr(mine, "store", lambda p, f: None)
+    monkeypatch.setattr(mine, "fetch_synonyms", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_chinese", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "MEDIA_DIR", str(tmp_path))
+    monkeypatch.setattr(mine, "fetch_definition",
+                        lambda *a, **k: (mine.LAST_FLAGS.clear(), "x")[1])
+
+
+def test_duplicate_probe_carries_a_sentence_so_the_front_is_not_empty(monkeypatch, tmp_path):
+    """新字不能因為預檢卡面空白而被誤判成「已存在」。"""
+    fake, seen = _picky_anki(existing_words=set())
+    monkeypatch.setattr(mine, "invoke", fake)
+    _stub_card_pipeline(monkeypatch, tmp_path)
+    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
+    assert mine.add_card("vid", "v.mp4", sent, "alpha", "t") is not None
+    assert seen["added"] == "alpha"
+    assert seen["probes"][0]["Sentence"] == "Alpha bravo."
+
+
+def test_duplicate_probe_still_detects_a_real_duplicate(monkeypatch, tmp_path):
+    """補了 Sentence 之後，真的重複的字仍然要被擋下，不能變成全部放行。"""
+    fake, seen = _picky_anki(existing_words={"alpha"})
+    monkeypatch.setattr(mine, "invoke", fake)
+    _stub_card_pipeline(monkeypatch, tmp_path)
+    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
+    assert mine.add_card("vid", "v.mp4", sent, "alpha", "t") is None
+    assert "added" not in seen
