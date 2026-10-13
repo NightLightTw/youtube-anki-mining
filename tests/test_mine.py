@@ -252,7 +252,7 @@ def test_legacy_snap_forces_snapping_even_with_json3(monkeypatch, tmp_path):
     for legacy, expected in ((False, False), (True, True)):
         seen.clear()
         monkeypatch.setattr(mine, "invoke",
-                            lambda action, **kw: [True] if action == "canAddNotes" else 1)
+                            lambda action, **kw: [{"canAdd": True}] if action == "canAddNotesWithErrorDetail" else 1)
         mine.add_card("vid", "v.mp4", sent, "alpha", "t", legacy_snap=legacy)
         assert seen["snap"] is expected
 
@@ -261,7 +261,7 @@ def test_sentence_without_json3_still_snaps(monkeypatch, tmp_path):
     """沒有逐字時間戳（人工字幕）的句子維持吸附——那條路徑的行為不該被這次改動影響。"""
     seen = {}
     monkeypatch.setattr(mine, "invoke",
-                        lambda action, **kw: [True] if action == "canAddNotes" else 1)
+                        lambda action, **kw: [{"canAdd": True}] if action == "canAddNotesWithErrorDetail" else 1)
     monkeypatch.setattr(mine, "extract_audio",
                         lambda v, s, e, o, snap=True: seen.setdefault("snap", snap))
     monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
@@ -481,8 +481,8 @@ def test_add_card_tags_carry_the_uncertainty(monkeypatch, tmp_path):
     seen = {}
 
     def fake_invoke(action, **kw):
-        if action == "canAddNotes":
-            return [True]
+        if action == "canAddNotesWithErrorDetail":
+            return [{"canAdd": True}]
         if action == "addNote":
             seen["tags"] = kw["note"]["tags"]
             return 1
@@ -511,8 +511,8 @@ def test_add_card_has_no_uncertainty_tags_when_confident(monkeypatch, tmp_path):
     seen = {}
 
     def fake_invoke(action, **kw):
-        if action == "canAddNotes":
-            return [True]
+        if action == "canAddNotesWithErrorDetail":
+            return [{"canAdd": True}]
         if action == "addNote":
             seen["tags"] = kw["note"]["tags"]
             return 1
@@ -577,8 +577,8 @@ def test_uncertain_summary_only_records_cards_that_were_created(monkeypatch, tmp
                                          mine.LAST_FLAGS.add("pos"), "x")[2])
 
     def failing_invoke(action, **kw):
-        if action == "canAddNotes":
-            return [True]
+        if action == "canAddNotesWithErrorDetail":
+            return [{"canAdd": True}]
         raise RuntimeError("AnkiConnect 掛了")
 
     monkeypatch.setattr(mine, "invoke", failing_invoke)
@@ -600,7 +600,7 @@ def test_uncertain_summary_records_created_cards(monkeypatch, tmp_path):
                         lambda *a, **k: (mine.LAST_FLAGS.clear(),
                                          mine.LAST_FLAGS.add("sense"), "x")[2])
     monkeypatch.setattr(mine, "invoke",
-                        lambda action, **kw: [True] if action == "canAddNotes" else 1)
+                        lambda action, **kw: [{"canAdd": True}] if action == "canAddNotesWithErrorDetail" else 1)
     mine.UNCERTAIN.clear()
     sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
     mine.add_card("vid", "v.mp4", sent, "alpha", "t")
@@ -817,8 +817,8 @@ def test_nodef_reaches_the_note_tags(monkeypatch, tmp_path):
     seen = {}
 
     def fake_invoke(action, **kw):
-        if action == "canAddNotes":
-            return [True]
+        if action == "canAddNotesWithErrorDetail":
+            return [{"canAdd": True}]
         if action == "addNote":
             seen["tags"] = kw["note"]["tags"]
             return 1
@@ -1074,24 +1074,37 @@ def test_entry_without_shortdef_and_no_recovery_still_reports_nodef(monkeypatch)
     assert "nodef" in mine.LAST_FLAGS and "lookupfail" not in mine.LAST_FLAGS
 
 
-# ---- 重複預檢必須通過 AnkiConnect 的「空白卡面」檢查 ----
+# ---- 重複預檢：必須通過「空白卡面」檢查，且要分得出失敗原因 ----
 
-def _picky_anki(existing_words):
-    """模擬新版 AnkiConnect 的 canAddNotes：卡面正面是空白就一律回 False（不管有沒有重複）。
+_DUP = "cannot create note because it is a duplicate"
+_EMPTY_FRONT = "The field values you have provided would make an empty question on all cards."
 
-    正面模板是 {{Sentence}}{{SentenceAudio}}，所以 Sentence 與 SentenceAudio 兩欄都空
-    的 note 會被擋下——這正是更新 AnkiConnect 後，所有字都被回報成「已存在」的原因。
+
+def _picky_anki(existing_words, with_detail=True):
+    """模擬新版 AnkiConnect 的 canAddNotes／canAddNotesWithErrorDetail。
+
+    驗證順序同外掛：先看重複，再看卡面。正面模板是 {{Sentence}}{{SentenceAudio}}，
+    兩欄都空的 note 會被擋下——這正是更新 AnkiConnect 後，所有字都被回報成「已存在」
+    的原因。with_detail=False 模擬沒有 WithErrorDetail 的舊版外掛。
     """
-    seen = {"probes": []}
+    seen = {"probes": [], "actions": []}
+
+    def verdict(fields):
+        if fields.get("Word") in existing_words:
+            return {"canAdd": False, "error": _DUP}
+        if not (fields.get("Sentence") or fields.get("SentenceAudio")):
+            return {"canAdd": False, "error": _EMPTY_FRONT}
+        return {"canAdd": True}
 
     def fake_invoke(action, **kw):
-        if action == "canAddNotes":
+        seen["actions"].append(action)
+        if action in ("canAddNotes", "canAddNotesWithErrorDetail"):
+            if action == "canAddNotesWithErrorDetail" and not with_detail:
+                raise RuntimeError("AnkiConnect 錯誤（canAddNotesWithErrorDetail）：unsupported action")
             fields = kw["notes"][0]["fields"]
             seen["probes"].append(fields)
-            front_empty = not (fields.get("Sentence") or fields.get("SentenceAudio"))
-            if front_empty:
-                return [False]
-            return [fields.get("Word") not in existing_words]
+            v = verdict(fields)
+            return [v] if action.endswith("Detail") else [v["canAdd"]]
         if action == "addNote":
             seen["added"] = kw["note"]["fields"]["Word"]
             return 1
@@ -1111,22 +1124,96 @@ def _stub_card_pipeline(monkeypatch, tmp_path):
                         lambda *a, **k: (mine.LAST_FLAGS.clear(), "x")[1])
 
 
+_SENT = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
+
+
 def test_duplicate_probe_carries_a_sentence_so_the_front_is_not_empty(monkeypatch, tmp_path):
-    """新字不能因為預檢卡面空白而被誤判成「已存在」。"""
+    """新字的預檢要帶 Sentence，否則會因為卡面空白被擋下。"""
     fake, seen = _picky_anki(existing_words=set())
     monkeypatch.setattr(mine, "invoke", fake)
     _stub_card_pipeline(monkeypatch, tmp_path)
-    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
-    assert mine.add_card("vid", "v.mp4", sent, "alpha", "t") is not None
+    assert mine.add_card("vid", "v.mp4", _SENT, "alpha", "t") is not None
     assert seen["added"] == "alpha"
     assert seen["probes"][0]["Sentence"] == "Alpha bravo."
 
 
-def test_duplicate_probe_still_detects_a_real_duplicate(monkeypatch, tmp_path):
+def test_a_real_duplicate_is_skipped(monkeypatch, tmp_path):
     """補了 Sentence 之後，真的重複的字仍然要被擋下，不能變成全部放行。"""
     fake, seen = _picky_anki(existing_words={"alpha"})
     monkeypatch.setattr(mine, "invoke", fake)
     _stub_card_pipeline(monkeypatch, tmp_path)
-    sent = {"text": "Alpha bravo.", "start": 1.0, "end": 3.0, "nwords": 2, "from_json3": True}
-    assert mine.add_card("vid", "v.mp4", sent, "alpha", "t") is None
+    assert mine.add_card("vid", "v.mp4", _SENT, "alpha", "t") is None
     assert "added" not in seen
+
+
+def test_a_non_duplicate_rejection_is_an_error_not_a_skip(monkeypatch, tmp_path):
+    """被拒絕的原因不是重複時，要大聲報錯，不能悄悄當成「已存在」。
+
+    這正是這次事故的形狀：外掛因為別的原因回 canAdd=False，舊程式一律印「已存在」，
+    整支影片一張卡都沒建、也沒有任何線索。
+    """
+    fake, seen = _picky_anki(existing_words=set())
+
+    def blank_front(action, **kw):
+        if action == "canAddNotesWithErrorDetail":
+            return [{"canAdd": False, "error": _EMPTY_FRONT}]
+        return fake(action, **kw)
+
+    monkeypatch.setattr(mine, "invoke", blank_front)
+    _stub_card_pipeline(monkeypatch, tmp_path)
+    touched = []
+    # 預檢失敗時不能已經切音檔或存媒體，否則每個失敗的候選都會留下孤兒檔案
+    monkeypatch.setattr(mine, "extract_audio", lambda *a, **k: touched.append("extract_audio"))
+    monkeypatch.setattr(mine, "store", lambda p, f: touched.append("store"))
+    with pytest.raises(RuntimeError, match="empty question"):
+        mine.add_card("vid", "v.mp4", _SENT, "alpha", "t")
+    assert "added" not in seen
+    assert touched == []
+
+
+def test_an_unknown_message_that_mentions_duplicate_is_still_an_error(monkeypatch, tmp_path):
+    """重複只認那一句固定訊息，不用子字串：別的訊息碰巧含 duplicate 不算重複。"""
+    def odd(action, **kw):
+        if action == "canAddNotesWithErrorDetail":
+            return [{"canAdd": False, "error": "duplicate field name in model"}]
+        return None
+
+    monkeypatch.setattr(mine, "invoke", odd)
+    _stub_card_pipeline(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="duplicate field name"):
+        mine.add_card("vid", "v.mp4", _SENT, "alpha", "t")
+
+
+def test_a_rejection_without_a_reason_is_an_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(mine, "invoke",
+                        lambda action, **kw: [{"canAdd": False}] if action == "canAddNotesWithErrorDetail" else None)
+    _stub_card_pipeline(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="沒有提供原因"):
+        mine.add_card("vid", "v.mp4", _SENT, "alpha", "t")
+
+
+@pytest.mark.parametrize("existing, expect_card", [(set(), True), ({"alpha"}, False)])
+def test_old_plugin_without_error_detail_falls_back_to_plain_can_add(
+        monkeypatch, tmp_path, existing, expect_card):
+    """舊版外掛沒有 WithErrorDetail：降級到 canAddNotes，行為與以前一致。"""
+    fake, seen = _picky_anki(existing_words=existing, with_detail=False)
+    monkeypatch.setattr(mine, "invoke", fake)
+    _stub_card_pipeline(monkeypatch, tmp_path)
+    got = mine.add_card("vid", "v.mp4", _SENT, "alpha", "t")
+    assert (got is not None) is expect_card
+    assert "canAddNotes" in seen["actions"]
+
+
+def test_other_errors_do_not_trigger_the_fallback(monkeypatch, tmp_path):
+    """只有「不支援這個 action」才降級；連不上、容量已滿這類錯誤要原樣往外拋。"""
+    calls = []
+
+    def boom(action, **kw):
+        calls.append(action)
+        raise RuntimeError("AnkiConnect 錯誤（canAddNotesWithErrorDetail）：Search snapshot capacity exceeded.")
+
+    monkeypatch.setattr(mine, "invoke", boom)
+    _stub_card_pipeline(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="capacity exceeded"):
+        mine.add_card("vid", "v.mp4", _SENT, "alpha", "t")
+    assert calls == ["canAddNotesWithErrorDetail"]

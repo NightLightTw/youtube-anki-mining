@@ -1083,6 +1083,36 @@ def highlight(sentence, word):
                   flags=re.IGNORECASE)
 
 
+# AnkiConnect 在 canAddNotesWithErrorDetail 裡回報「重複」的固定訊息。精確比對，不用
+# 子字串：未知的訊息（空白卡面、模型或牌組不存在…）一律當成錯誤，不能當成重複。
+# 代價是外掛哪天改了這句措辭，每個重複字都會變成明確的「失敗」而不是悄悄通過，
+# 那是想要的方向——寧可大聲壞掉，也不要像 canAddNotes 那樣把所有原因都吞成 False。
+_DUPLICATE_MESSAGES = frozenset({"cannot create note because it is a duplicate"})
+
+
+def _can_add(probe):
+    """這張 note 能不能建？True＝可以，False＝確定是重複；其他原因一律拋 RuntimeError。
+
+    canAddNotes 只回 True/False：真的重複、卡面是空白、模型或牌組有問題，全都是
+    False，呼叫端無法分辨。AnkiConnect 更新後新增了空白卡面檢查，管線就把整支影片的
+    候選字全判成「已存在」，一張卡都沒建，而且沒有任何錯誤訊息。
+    """
+    try:
+        result = invoke("canAddNotesWithErrorDetail", notes=[probe])[0]
+    except RuntimeError as ex:
+        # 舊版外掛沒有這個 action：只在確認是「不支援」時才降級，其他錯誤（連不上、
+        # 容量已滿…）照常往外拋。降級後 False 仍然分不出原因，維持舊行為。
+        if "unsupported action" not in str(ex):
+            raise
+        return bool(invoke("canAddNotes", notes=[probe])[0])
+    if result.get("canAdd"):
+        return True
+    reason = (result.get("error") or "").strip()
+    if reason in _DUPLICATE_MESSAGES:
+        return False
+    raise RuntimeError(f"AnkiConnect 拒絕建立這張卡：{reason or '（沒有提供原因）'}")
+
+
 def add_card(video_id, video_file, sent, word, title, collocation="", highlight_word=None,
              save_image=False, legacy_snap=False):
     start = sent["start"]
@@ -1102,7 +1132,7 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
     probe = {"deckName": DECK_NAME, "modelName": MODEL_NAME,
              "fields": {"Word": html.escape(word), "Sentence": html.escape(sent["text"])},
              "options": {"allowDuplicate": False}}
-    if not invoke("canAddNotes", notes=[probe])[0]:
+    if not _can_add(probe):
         print(f"  ↷ 跳過（已存在）：{word}")
         return None
 
