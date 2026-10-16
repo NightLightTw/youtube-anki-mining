@@ -303,7 +303,7 @@ cd /path/to/youtube-anki-mining
 - 中文是字面直翻，不合語境（例如 `retrieval` 譯成「檢索」，句子講的其實是記憶「提取」）
 - 例句裡的 `um`、`uh` 與重複字
 
-字典查不到、由 agent 自己寫的定義，請它明確標註，日後才分得出來。系統性解法見下方 Roadmap 的 LLM 輔助方向。
+字典查不到、由 agent 自己寫的定義，請它明確標註，日後才分得出來。完整的檢查清單與重切音檔的方法見[逐卡稽核](docs/card-audit.md)。系統性解法見下方 Roadmap 的 LLM 輔助方向。
 
 ### 音檔可能漏掉句首的幾個字
 
@@ -384,7 +384,7 @@ Python 管線 (yt-dlp + ffmpeg) → AnkiConnect(:8765) → Anki 桌面 → AnkiW
 | `tools/bench_cut.py` | 量測音檔切點誤差的工具（開發用）。拿有逐字時間戳的影片當標準答案，量出「只能靠推算」那條路徑的誤差，用來驗證參數調整有沒有效 |
 | `tools/asr_timing.py` | 選用：用本機語音辨識產生逐字時間戳，給人工字幕影片用。需自備 whisper 環境，一般使用者不需要 |
 | `scripts/gen_readme_zh_cn.py` | 從繁體 README 自動生成簡體版（OpenCC tw2sp），CI 強制兩版同步 |
-| `docs/` | README 素材 |
+| `docs/` | 開發文件：[開發指南](docs/development.md)、[技術雷區](docs/pitfalls.md)、[逐卡稽核](docs/card-audit.md)，以及 README 用到的圖 |
 | `youtube-anki-mining-spec.md` | 原始設計規格 |
 
 </details>
@@ -395,6 +395,8 @@ Python 管線 (yt-dlp + ffmpeg) → AnkiConnect(:8765) → Anki 桌面 → AnkiW
 ## 貢獻與回報問題
 
 歡迎開 [Issue](https://github.com/NightLightTw/youtube-anki-mining/issues) 回報問題或提出想法。回報下載類問題時請附上：影片網址、錯誤訊息全文、`yt-dlp` 版本。
+
+想改程式的話，先看[開發指南](docs/development.md)：怎麼跑測試、改 README 後要做什麼，以及已知的技術雷區。
 
 請理解：本工具依賴 YouTube（非官方存取）與第三方 API，上游隨時可能變動，不保證能立即修復所有失效情況。
 
