@@ -248,8 +248,13 @@ else
 fi
 
 # 7) 同步到 AnkiWeb（手機下拉同步即可看到新卡）
+#    用 anki.sync() 而不是直接 invoke('sync')：新版 AnkiConnect 送出就回傳、背景才同步，
+#    不等它結束的話，下一步 monkeytype 讀牌組會被拒。
+#    卡片到這裡已經建好，同步失敗或等太久只警告、不中斷，免得把後面的步驟一起擋掉
 step "同步到 AnkiWeb"
-"$PY" -c "from anki import invoke; invoke('sync'); print('✓ 已同步')"
+if ! "$PY" -c "from anki import sync; sync(); print('✓ 已同步')"; then
+  echo "⚠️ AnkiWeb 同步沒有確認完成（卡片已做完不受影響），請在 Anki 按右上角「同步」確認" >&2
+fi
 
 # 8) 同步卡片到 monkeytype 打字練習（選配整合，會改寫相鄰 ../monkeytype 專案的
 #    資料檔。「修改另一個專案」不該是一鍵製卡的隱含副作用，所以預設關閉：

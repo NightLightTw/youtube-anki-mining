@@ -1,5 +1,6 @@
 """AnkiConnect 共用小工具：invoke() 呼叫 + 常數定義。"""
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -71,3 +72,33 @@ def invoke(action, **params):
     if resp.get("error") is not None:
         raise RuntimeError(f"AnkiConnect 錯誤（{action}）：{resp['error']}")
     return resp["result"]
+
+
+# 背景同步含媒體上傳，遇到「要上傳還是下載整個牌組」的對話框也會一直等使用者，
+# 所以上限放寬；逾時只代表這裡不再等，背景同步仍會繼續
+SYNC_TIMEOUT = 600
+_BUSY_MESSAGE = "Collection lifecycle operation is active"
+
+
+def sync(timeout=SYNC_TIMEOUT, poll=0.5):
+    """觸發 AnkiWeb 同步，等它結束才回傳。
+
+    新版 AnkiConnect 的 sync 一送出就回傳（實測 0.06 秒），同步在背景進行，
+    期間任何碰到牌組的呼叫都會被拒並回 "Collection lifecycle operation is active"。
+    直接接著跑 sync_monkeytype.py 就是這樣失敗的。舊版是跑完才回傳，這裡第一次輪詢就會成功。
+
+    只等得到「同步結束」，等不到同步成功與否：舊版 API 不回報背景同步的結果。
+    """
+    invoke("sync")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            invoke("deckNames")
+            return
+        except RuntimeError as ex:
+            if _BUSY_MESSAGE not in str(ex):
+                raise
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"AnkiWeb 同步超過 {timeout} 秒還沒結束，請看 Anki 視窗是否在等你選擇或卡住")
+        time.sleep(poll)
