@@ -718,6 +718,27 @@ def _find_run_on(data, word):
     return base, fl, shortdefs
 
 
+# MW 的 shortdef 有時第一條是分節標題，以 ": such as" 收尾，真正的意思在後面幾條：
+#   dependence → ["the state of being dependent: such as",
+#                 "the state of needing something or someone else for support…", …]
+# 管線挑不出義項就退回第一條，卡片上會出現話講一半的定義（實測牌組 1613 張裡
+# 還留著 11 張）。光刪掉 ": such as" 也不夠：剩下的 "the state of being dependent"
+# 是拿同一個字解釋自己。
+_HEADER_SENSE = re.compile(r"(?::|\{bc\})\s*such\s+as[\s.]*$", re.IGNORECASE)
+
+
+def _drop_header_senses(shortdefs):
+    """去掉只是分節標題的 shortdef，讓後面真正的義項參與挑選。
+
+    全部都是標題時（沒有細項可換）才退而求其次，只刪掉結尾的 ": such as"，
+    至少讓定義是完整的一句，不會讓 Definition 欄變空。
+    """
+    kept = [sd for sd in shortdefs if not _HEADER_SENSE.search(sd)]
+    if kept:
+        return kept
+    return [_HEADER_SENSE.sub("", sd) for sd in shortdefs]
+
+
 def _mw_clean(text):
     """去掉 MW 的標記符號（{bc}、{it}...{/it}、{sx|...}、—often 等）。"""
     text = re.sub(r"\{bc\}", ": ", text)
@@ -937,6 +958,7 @@ def fetch_definition(word, sentence="", surface=""):
             run_on = _find_run_on(found.raw, word)
             if run_on:
                 base, fl, base_defs = run_on
+                base_defs = _drop_header_senses(base_defs)
                 # 派生詞在字典裡沒有自己的定義，只能用母詞的。標明「某字的某某形」，
                 # 否則會出現詞性與定義內容打架的情況——vulnerability 標 noun，
                 # 定義文字卻是形容詞的「easily hurt or harmed」。
@@ -960,6 +982,8 @@ def fetch_definition(word, sentence="", surface=""):
             LAST_FLAGS.add("nodef")
             print(f"  ⚠ 查無定義：{word} 在字典裡有詞條，但沒有可用的簡明釋義")
             return ""
+        # 要在挑義項與判斷「是不是猜的」之前去掉，兩者才看得到同一組候選
+        shortdefs = _drop_header_senses(shortdefs)
         idx = _pick_sense(shortdefs, sentence, surface)
         if _sense_is_a_guess(shortdefs, sentence, surface):
             LAST_FLAGS.add("sense")

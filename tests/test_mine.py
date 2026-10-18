@@ -347,6 +347,115 @@ def test_fetch_definition_records_nothing_for_single_sense(monkeypatch):
     assert mine.LAST_FLAGS == set()
 
 
+# ---------- ": such as" 分節標題 ----------
+#
+# MW 的 shortdef 第一條有時只是分節標題（"the state of being dependent: such as"），
+# 真正的意思在後面。實測 conception、dependence、activate 都這樣，管線退回第一條時
+# 卡片上就是話講一半的定義，conception 的中文還跟著翻成「構想」。
+
+_DEPENDENCE = ["the state of being dependent: such as",
+               "the state of needing something or someone else for support, help, etc.",
+               "the state of being addicted to alcohol or a drug"]
+
+
+def test_header_sense_is_dropped():
+    assert mine._drop_header_senses(_DEPENDENCE) == _DEPENDENCE[1:]
+
+
+@pytest.mark.parametrize("header", [
+    "not safe{bc}such as",      # 實測的 shortdef 都是冒號；{bc} 是 MW 標記裡的冒號，防萬一
+    "not safe: Such As",
+    "not safe:  such  as. ",
+])
+def test_header_variants_are_dropped(header):
+    assert mine._drop_header_senses([header, "likely to cause harm"]) == ["likely to cause harm"]
+
+
+def test_header_is_dropped_wherever_it_appears():
+    assert mine._drop_header_senses(["likely to cause harm", "not safe: such as"]) == [
+        "likely to cause harm"]
+
+
+@pytest.mark.parametrize("sense", [
+    "a fuel used to make something (such as a rocket) go forward",  # 句中舉例
+    "a gas used in lamps: such as neon or argon",                   # 冒號後面接了例子
+])
+def test_such_as_with_examples_is_kept(sense):
+    """只有結尾的 "such as" 才是標題，後面有接例子就是完整的定義。"""
+    assert mine._drop_header_senses([sense, "a light"]) == [sense, "a light"]
+
+
+def test_header_only_entry_keeps_a_complete_definition():
+    # 沒有細項可換時不能讓定義變空，退而求其次只刪掉結尾
+    assert mine._drop_header_senses(["not safe: such as"]) == ["not safe"]
+    assert mine._drop_header_senses(["not safe: such as", "not sure: such as"]) == [
+        "not safe", "not sure"]
+
+
+def test_input_list_is_not_modified():
+    sds = list(_DEPENDENCE)
+    mine._drop_header_senses(sds)
+    assert sds == _DEPENDENCE
+
+
+def test_header_plus_one_real_sense_is_not_a_guess(monkeypatch):
+    """去掉標題後只剩一個義項就沒得挑，不該打 sense-uncertain。"""
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: _mw_entry(
+        ["not safe: such as", "able or likely to cause harm"], fl="adjective", hw="unsafe"))
+    out = mine.fetch_definition("unsafe", sentence="Hold on, let me check that again.",
+                                surface="unsafe")
+    assert "likely to cause harm" in out
+    assert mine.LAST_FLAGS == set()
+
+
+def test_backfill_tool_also_skips_header_sense(monkeypatch):
+    """tools/backfill_tags.py 會重算管線的選擇來比對既有卡片，兩邊要看同一組候選，
+    否則它會把管線正確產生的定義當成「不是管線產的」而跳過。"""
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location(
+        "backfill_tags", pathlib.Path(__file__).parent.parent / "tools" / "backfill_tags.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: _mw_entry(_DEPENDENCE, hw="dependence"))
+    sent = "Hold on, let me check that again."
+    flags, definition = mod.analyse("dependence", sent, "dependence")
+    assert definition == mine.fetch_definition("dependence", sentence=sent, surface="dependence")
+    assert flags == frozenset({"sense"})
+
+
+def test_fetch_definition_never_returns_a_header_sense(monkeypatch):
+    """沒有任何訊號時原本退回第一條（標題），現在退回第一個真正的義項。"""
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: _mw_entry(_DEPENDENCE, hw="dependence"))
+    out = mine.fetch_definition("dependence", sentence="Hold on, let me check that again.",
+                                surface="dependence")
+    assert "such as" not in out
+    assert "needing something or someone else" in out
+    assert "sense" in mine.LAST_FLAGS      # 剩兩個候選仍是盲選，照樣標記
+
+
+def test_fetch_definition_can_pick_a_sense_after_the_header(monkeypatch):
+    """去掉標題後索引要對得上：例句對上第三條時要回第三條，不是錯開一格。"""
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: _mw_entry(_DEPENDENCE, hw="dependence"))
+    out = mine.fetch_definition("dependence", sentence="His dependence on alcohol got worse.",
+                                surface="dependence")
+    assert "addicted to alcohol" in out
+    assert mine.LAST_FLAGS == set()
+
+
+def test_derivative_fallback_also_skips_header_sense(monkeypatch):
+    monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "dummy")
+    monkeypatch.setattr(mine, "_mw_get", lambda ref, key, w: _entry_with_uro(
+        "de*pen*dence", "noun", _DEPENDENCE, "de*pen*den*cies", "noun"))
+    out = mine.fetch_definition("dependencies", sentence="Hold on, let me check that again.",
+                                surface="dependencies")
+    assert "such as" not in out
+    assert "needing something or someone else" in out
+
+
 def test_fetch_definition_records_nothing_without_api_key(monkeypatch):
     monkeypatch.setattr(mine, "MW_LEARNERS_KEY", "")
     assert mine.fetch_definition("widget", sentence="Anything at all.") == ""

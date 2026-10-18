@@ -88,6 +88,7 @@ def analyse(word, sentence, surface):
     shortdefs = entry.get("shortdef") or []
     if not shortdefs:
         return frozenset(flags), ""
+    shortdefs = mine._drop_header_senses(shortdefs)   # 跟 fetch_definition 看同一組候選
     if mine._sense_is_a_guess(shortdefs, sentence, surface):
         flags.add("sense")
     idx = mine._pick_sense(shortdefs, sentence, surface)
