@@ -9,6 +9,12 @@ import history
 import mine
 
 
+@pytest.fixture(autouse=True)
+def _history_enabled(monkeypatch):
+    """這個檔案的測試預設是「已啟用」（維護者的情境）；關閉的行為在檔案最後明確測。"""
+    monkeypatch.setenv("RECORD_HISTORY", "1")
+
+
 # ---------- 修改分類 ----------
 
 @pytest.mark.parametrize("original,final,expected", [
@@ -475,3 +481,76 @@ def test_append_works_without_fcntl(monkeypatch):
 def test_flag_hit_rate_excludes_deleted_cards(tmp_path):
     _two_cards(tmp_path)                                   # 1 號有標記且留下、3 號被刪
     assert history.flag_hit_rate(history.joined())["sense-uncertain"] == (1, 1)
+
+
+# ---------- 預設關閉（一般使用者不該多出一個資料夾） ----------
+
+def test_recording_is_off_unless_explicitly_enabled(monkeypatch, tmp_path, capsys):
+    """沒啟用時完全不動作：不建資料夾、不算指紋、不呼叫 git、不印任何東西。"""
+    monkeypatch.delenv("RECORD_HISTORY")
+    monkeypatch.setattr(history, "pipeline_identity", lambda: (_ for _ in ()).throw(AssertionError("不該被呼叫")))
+    monkeypatch.setattr(history, "file_md5", lambda p: (_ for _ in ()).throw(AssertionError("不該被呼叫")))
+    _created(tmp_path)
+    out = capsys.readouterr()
+    assert not history.HISTORY_DIR.exists() and out.out == "" and out.err == ""
+
+
+@pytest.mark.parametrize("value", ["", "0", "true", "yes", "on"])
+def test_only_the_exact_value_1_enables_recording(monkeypatch, tmp_path, value, capsys):
+    monkeypatch.setenv("RECORD_HISTORY", value)
+    monkeypatch.setattr(history, "pipeline_identity", lambda: (_ for _ in ()).throw(AssertionError("不該被呼叫")))
+    _created(tmp_path)
+    out = capsys.readouterr()
+    assert not history.HISTORY_DIR.exists() and out.out == "" and out.err == ""
+
+
+def test_add_card_leaves_no_trace_when_history_is_off(monkeypatch, tmp_path):
+    monkeypatch.delenv("RECORD_HISTORY")
+    monkeypatch.setattr(mine, "invoke", lambda action, **kw:
+                        [{"canAdd": True}] if action == "canAddNotesWithErrorDetail" else 5)
+    monkeypatch.setattr(mine, "extract_audio", lambda *a, **k: None)
+    monkeypatch.setattr(mine, "normalize_audio", lambda p: None)
+    monkeypatch.setattr(mine, "store", lambda p, f: None)
+    monkeypatch.setattr(mine, "fetch_definition", lambda *a, **k: "d")
+    monkeypatch.setattr(mine, "fetch_synonyms", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "fetch_chinese", lambda *a, **k: "")
+    monkeypatch.setattr(mine, "MEDIA_DIR", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(history.subprocess, "run", lambda *a, **k: calls.append(a))   # 連 git 都不該呼叫
+    assert mine.add_card("v", "v.mp4", {"text": "A b.", "start": 0.0, "end": 1.0, "nwords": 2}, "b", "t") == 5
+    assert not history.HISTORY_DIR.exists() and calls == []
+
+
+def test_disabled_history_tells_the_user_how_to_turn_it_on(monkeypatch, capsys):
+    monkeypatch.delenv("RECORD_HISTORY")
+    history.print_stats()
+    assert "RECORD_HISTORY=1" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="RECORD_HISTORY=1"):
+        history.finalize("v", invoke=FakeAnki({}))
+
+
+def test_enabled_history_does_not_nag_in_the_empty_stats_message(capsys):
+    history.print_stats()
+    assert "RECORD_HISTORY=1" not in capsys.readouterr().out
+
+
+def test_standalone_cli_sees_record_history_in_dotenv(monkeypatch, tmp_path, capsys):
+    """單獨執行 history.py 不經過 mine.py：.env 裡已經啟用的人，不該再被提示「請啟用」。"""
+    monkeypatch.delenv("RECORD_HISTORY")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").write_text("MW_LEARNERS_KEY=secret\nRECORD_HISTORY=1\n")
+    monkeypatch.setattr(history, "REPO", repo)
+    history.main(["stats"])
+    out = capsys.readouterr().out
+    assert "RECORD_HISTORY=1" not in out and "還沒有已 finalize 的資料" in out
+
+
+def test_standalone_cli_still_hints_when_dotenv_has_no_flag(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("RECORD_HISTORY")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").write_text("MW_LEARNERS_KEY=secret\n")
+    monkeypatch.setattr(history, "REPO", repo)
+    history.main(["stats"])
+    assert "RECORD_HISTORY=1" in capsys.readouterr().out

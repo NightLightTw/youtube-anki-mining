@@ -11,10 +11,23 @@ set -euo pipefail
 # 出錯時明確指出是哪一行、剛才印出的最後一個「== 步驟 ==」是什麼，方便定位。
 # trap 要在任何可能失敗的指令（含 cd）之前裝好，否則那個指令失敗時不會走這個訊息。
 LAST_STEP="(尚未開始)"
+POT_MISSING=0
+# 沒裝 PO Token server 又在下載階段失敗，最常見的原因是 YouTube 擋下了下載，這時才提示去安裝。
+# 獨立成函式：字幕下載失敗那條路徑是直接 exit 1，不會經過 ERR trap。
+pot_hint() {
+  if [ "$POT_MISSING" = 1 ]; then
+    case "$LAST_STEP" in
+      *下載*|*影片網址*|*標題*)
+        echo "  若訊息是 Sign in to confirm you're not a bot 這類，是 YouTube 擋下了下載：" >&2
+        echo "  請安裝 PO Token server（README「PO Token Server」章節），或換個網路再試。" >&2 ;;
+    esac
+  fi
+}
 on_error() {
   echo "" >&2
   echo "✗ 執行失敗：在「$LAST_STEP」這一步中斷（run.sh 第 $1 行）" >&2
   echo "  已完成的下載/卡片不會遺失；修正問題後可直接重新執行同一個指令。" >&2
+  pot_hint
 }
 trap 'on_error $LINENO' ERR
 trap 'echo ""; echo "✗ 使用者中斷 (Ctrl-C)。已完成的下載/卡片不會遺失，可重新執行。" >&2; exit 130' INT
@@ -74,8 +87,9 @@ elif [ -d "$POT_DIR/build" ]; then
     echo "⚠️ PO Token server 啟動逾時，YouTube 下載可能會被擋（log: $POT_LOG）" >&2
   fi
 else
-  echo "⚠️ 找不到 PO Token server ($POT_DIR)。若下一步下載失敗，" >&2
-  echo "   請參考 README「PO Token Server」章節安裝 bgutil-ytdlp-pot-provider。" >&2
+  # 沒裝是常態（多數影片沒有它也能下載），不用警告嚇人；下載真的失敗時，on_error 才提示去安裝
+  POT_MISSING=1
+  echo "  （未安裝 PO Token server，略過；沒有它多數影片也能下載）"
 fi
 
 # 1) 從網址抽出 video id（支援 youtu.be/xxx、watch?v=xxx、shorts/xxx，含 ?si= 等參數）
@@ -188,6 +202,7 @@ if [ ! -s "$SRT" ]; then
     grep -E "ERROR|WARNING" "$SUB_ERR_LOG" | tail -5 | sed 's/^/    /' >&2
   fi
   rm -f "$SUB_ERR_LOG"
+  pot_hint
   exit 1
 fi
 # 成功時也把 yt-dlp 的警告印出來：例如 en 被 429、改用 en-orig 成功，
@@ -217,7 +232,7 @@ fi
 if [ -s "$JSON3" ]; then
   echo "  ✓ 已取得逐字時間戳"
 else
-  echo "  – 這支影片沒有英文自動字幕，改用 SRT 內插時間（正常，不影響製卡）"
+  echo "  – 沒有取得逐字時間戳，改用 SRT 內插時間（不影響製卡，但音檔切點可能較不準）"
 fi
 
 # 5) 下載 360p 影片（做音檔/截圖用；若已存在會被覆蓋，可重跑）
@@ -251,24 +266,27 @@ fi
 #    用 anki.sync() 而不是直接 invoke('sync')：新版 AnkiConnect 送出就回傳、背景才同步，
 #    不等它結束的話，下一步 monkeytype 讀牌組會被拒。
 #    卡片到這裡已經建好，同步失敗或等太久只警告、不中斷，免得把後面的步驟一起擋掉
+#    沒登入 AnkiWeb（只用桌面版）不是錯誤，anki.py 會印一行說明就結束
 step "同步到 AnkiWeb"
-if ! "$PY" -c "from anki import sync; sync(); print('✓ 已同步')"; then
-  echo "⚠️ AnkiWeb 同步沒有確認完成（卡片已做完不受影響），請在 Anki 按右上角「同步」確認" >&2
-fi
+"$PY" anki.py sync || true
 
 # 8) 同步卡片到 monkeytype 打字練習（選配整合，會改寫相鄰 ../monkeytype 專案的
 #    資料檔。「修改另一個專案」不該是一鍵製卡的隱含副作用，所以預設關閉：
-#    要用的人在 .env 加一行 SYNC_MONKEYTYPE=1 顯式啟用。失敗只警告，不影響製卡結果）
-step "同步到 monkeytype"
-if grep -qx 'SYNC_MONKEYTYPE=1' .env 2>/dev/null \
-    && [ -f "sync_monkeytype.py" ] && [ -d "../monkeytype" ]; then
-  if "$PY" sync_monkeytype.py; then
-    echo "✓ 打字練習內容已更新（重新整理 monkeytype 頁面即生效）"
+#    要用的人在 .env 加一行 SYNC_MONKEYTYPE=1 顯式啟用。失敗只警告，不影響製卡結果。
+#    沒啟用的人整段都不顯示：他們不知道 monkeytype 是什麼，看到「略過」只會困惑）
+if grep -qx 'SYNC_MONKEYTYPE=1' .env 2>/dev/null; then
+  step "同步到 monkeytype"
+  if [ -f "sync_monkeytype.py" ] && [ -d "../monkeytype" ]; then
+    if "$PY" sync_monkeytype.py; then
+      echo "✓ 打字練習內容已更新（重新整理 monkeytype 頁面即生效）"
+    else
+      echo "⚠️ monkeytype 同步失敗（卡片已做完不受影響），可稍後手動執行：$PY sync_monkeytype.py" >&2
+    fi
+  elif [ ! -f "sync_monkeytype.py" ]; then
+    echo "  （略過：找不到 sync_monkeytype.py）"
   else
-    echo "⚠️ monkeytype 同步失敗（卡片已做完不受影響），可稍後手動執行：$PY sync_monkeytype.py" >&2
+    echo "  （略過：找不到 ../monkeytype 專案）"
   fi
-else
-  echo "  （略過：未在 .env 啟用 SYNC_MONKEYTYPE=1，或找不到 ../monkeytype 專案）"
 fi
 
 echo ""

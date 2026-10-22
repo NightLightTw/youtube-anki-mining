@@ -1,5 +1,6 @@
 """AnkiConnect 共用小工具：invoke() 呼叫 + 常數定義。"""
 import json
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -80,7 +81,10 @@ SYNC_TIMEOUT = 600
 _BUSY_MESSAGE = "Collection lifecycle operation is active"
 
 
-def sync(timeout=SYNC_TIMEOUT, poll=0.5):
+NOTICE_AFTER = 30
+
+
+def sync(timeout=SYNC_TIMEOUT, poll=0.5, notice_after=NOTICE_AFTER, on_notice=None):
     """觸發 AnkiWeb 同步，等它結束才回傳。
 
     新版 AnkiConnect 的 sync 一送出就回傳（實測 0.06 秒），同步在背景進行，
@@ -90,7 +94,9 @@ def sync(timeout=SYNC_TIMEOUT, poll=0.5):
     只等得到「同步結束」，等不到同步成功與否：舊版 API 不回報背景同步的結果。
     """
     invoke("sync")
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
+    noticed = False
     while True:
         try:
             invoke("deckNames")
@@ -98,7 +104,38 @@ def sync(timeout=SYNC_TIMEOUT, poll=0.5):
         except RuntimeError as ex:
             if _BUSY_MESSAGE not in str(ex):
                 raise
+        if on_notice and not noticed and time.monotonic() - started >= notice_after:
+            noticed = True                  # 等很久才提醒一次，正常很快結束的人完全看不到
+            on_notice()
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 f"AnkiWeb 同步超過 {timeout} 秒還沒結束，請看 Anki 視窗是否在等你選擇或卡住")
         time.sleep(poll)
+
+
+def sync_message(timeout=SYNC_TIMEOUT, on_notice=None):
+    """給 run.sh 用：回傳 (結束碼, 訊息)。沒登入 AnkiWeb 的人（只用桌面版）不是出錯，
+    不該被叫去「按同步」——他們根本沒有帳號。
+
+    成功訊息刻意不說「已同步」：外掛只告訴我們背景同步已經結束，不會告訴我們成功與否。"""
+    try:
+        sync(timeout=timeout, on_notice=on_notice)
+    except RuntimeError as ex:
+        # 只認外掛在「沒設定帳號」時的那一句；其他跟驗證有關的失敗（例如帳密過期）要當成失敗回報
+        if "sync: auth not configured" in str(ex):
+            return 0, "（未登入 AnkiWeb，略過同步；卡片已保存在本機）"
+        return 1, f"⚠️ AnkiWeb 同步沒有確認完成（卡片已做完不受影響）：{ex}\n   請在 Anki 按右上角「同步」確認"
+    return 0, "✓ 已送出 AnkiWeb 同步（若手機沒看到新卡，請在 Anki 按一次同步）"
+
+
+def _notice():
+    print("  同步還沒結束…若 Anki 跳出「上傳或下載」的選擇視窗，需要你選一個，同步才會繼續。",
+          flush=True)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] != ["sync"]:
+        sys.exit("用法：python anki.py sync")
+    code, message = sync_message(on_notice=_notice)
+    print(message, file=sys.stderr if code else sys.stdout)
+    sys.exit(code)

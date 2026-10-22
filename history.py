@@ -10,6 +10,9 @@
   finalized.jsonl  稽核完的最終狀態，一張卡一行；同一張卡可以再 finalize 多次
                    （例如事後補定義），統計時取每張卡最新的一筆
 
+這是給維護者／重度使用者的功能，**預設關閉**（一般使用者不需要，也不該多出一個存著例句的資料夾）。
+要啟用，在 .env 加一行：RECORD_HISTORY=1
+
 用法：
   python history.py finalize VIDEO_ID [--reason 文字]   # 稽核、同步完之後執行
   python history.py stats [--by video|pipeline|month]   # 看修正比例與趨勢
@@ -39,6 +42,27 @@ SCHEMA = 1
 TRACKED = ("Sentence", "Definition", "Chinese", "Synonyms", "Collocation")
 LABELS = {"Sentence": "例句", "Definition": "定義", "Chinese": "中文", "Synonyms": "同義字", "Collocation": "搭配"}
 UNCERTAIN_TAGS = ("pos-uncertain", "sense-uncertain", "no-definition", "definition-lookup-failed")
+
+
+def enabled():
+    """RECORD_HISTORY=1 才記錄。預設關閉：這個功能會在使用者的 repo 底下寫檔、多呼叫 git，
+    對只想做卡的人是沒人要求的副作用（跟 SYNC_MONKEYTYPE 同樣的原則）。"""
+    return os.environ.get("RECORD_HISTORY") == "1"
+
+
+ENABLE_HINT = "修改歷史預設關閉；要啟用，在 .env 加一行 RECORD_HISTORY=1（之後建的卡才會被記錄）"
+
+
+def _load_env_flag():
+    """單獨執行 history.py（不經過 mine.py）時，也要讀得到 .env 裡的 RECORD_HISTORY，
+    不然啟用了的人還會被提示「請啟用」。只讀這一個鍵，不去動其他設定。"""
+    try:
+        for line in (REPO / ".env").read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.strip().partition("=")
+            if sep and key.strip() == "RECORD_HISTORY":
+                os.environ.setdefault("RECORD_HISTORY", value.strip())
+    except OSError:
+        pass
 
 
 def _now():
@@ -137,7 +161,9 @@ def file_md5(path):
 # ---------- 建卡時 ----------
 
 def record_created(note_id, note, video_id, word, surface, sent, audio_fn, audio_path, flags):
-    """記下管線原始輸出。任何失敗都只警告：記錄歷史不能讓建卡失敗。"""
+    """記下管線原始輸出。沒啟用就什麼都不做；任何失敗都只警告：記錄歷史不能讓建卡失敗。"""
+    if not enabled():
+        return
     try:
         _append("created.jsonl", dict(
             schema=SCHEMA, note_id=note_id, video_id=video_id, created_at=_now(),
@@ -216,8 +242,9 @@ def finalize(video_id, reason="audit", invoke=None):
         from anki import invoke
     latest = latest_created(video_id)
     if not latest:
+        hint = "" if enabled() else f"\n{ENABLE_HINT}"
         raise SystemExit(f"history/created.jsonl 沒有影片 {video_id} 的建卡紀錄"
-                         "（這支影片是在開始記錄歷史之前建的）")
+                         f"（若建卡時還沒啟用修改歷史，就不會有紀錄）{hint}")
     ids = list(latest)
     infos = invoke("notesInfo", notes=ids)
     if not isinstance(infos, list) or len(infos) != len(ids):
@@ -311,6 +338,8 @@ def print_stats(by="video"):
     pairs = joined()
     if not pairs:
         print("還沒有已 finalize 的資料。建卡後稽核完，執行：python history.py finalize VIDEO_ID")
+        if not enabled():
+            print(ENABLE_HINT)
         return
     rows = summarize(pairs, by)
     total = Counter()
@@ -348,6 +377,7 @@ def main(argv=None):
     p = sub.add_parser("stats")
     p.add_argument("--by", choices=("video", "pipeline", "month"), default="video")
     args = ap.parse_args(argv)
+    _load_env_flag()
     if args.cmd == "finalize":
         recs = finalize(args.video_id, args.reason)
         kept = [r for r in recs if r["status"] == "kept"]

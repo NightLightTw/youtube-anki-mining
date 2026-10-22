@@ -142,7 +142,7 @@ MW_THESAURUS_KEY=你的-thesaurus-key
 > 1. **读取**你本机 Anki 所有牌组的单词，用来排除已有的字（只读不改，不会动你既有的卡片）
 > 2. **下载**该视频的英文字幕与 360p 视频档到项目的 `media/` 目录
 > 3. **送出**目标单词到 Merriam-Webster API（若有设密钥）与 Google 翻译非官方端点查定义与翻译
-> 4. 制卡完成后**自动同步** AnkiWeb（等同你手动按 Anki 的同步钮）
+> 4. 制卡完成后**自动同步** AnkiWeb（等同你手动按 Anki 的同步钮；没登录 AnkiWeb 的话会自动略过，不影响制卡）
 
 ```bash
 ./run.sh "https://youtu.be/xxxxxxxxxxx"
@@ -154,7 +154,7 @@ MW_THESAURUS_KEY=你的-thesaurus-key
 
 - 预设最多 **20 张**新卡，放进 Anki 的 **`YouTube Mining`** 牌组
 - 每张卡含：目标字、例句（生字标色）、繁中释义、句子发音 mp3、视频时间戳链接；有设 MW 密钥时再加上英英定义与同反义字（没设则这两栏留空，属正常现象）
-- 卡片已推上 AnkiWeb；手机端开 Anki App 手动「同步」一次即可开始复习
+- 有登录 AnkiWeb 的话，卡片会同步上去（没登录就略过，卡片仍在本机）；手机端开 Anki App 手动「同步」一次即可开始复习
 - 任一步失败会清楚指出中断位置，已完成的下载/卡片不会遗失，修正后直接重跑同一指令即可
 
 ---
@@ -215,7 +215,7 @@ ID=iDG0rwm9GaQ   # 换成你的视频 ID
 
 ### 同步到手机
 
-1. `run.sh` 跑完会自动把 Mac 端的卡推上 **AnkiWeb**（手动模式则自己按 Anki 右上角「同步」）
+1. `run.sh` 跑完会自动把 Mac 端的卡推上 **AnkiWeb**（要先在 Anki 登录 AnkiWeb；没登录就略过。手动模式则自己按 Anki 右上角「同步」）
 2. 手机端（AnkiMobile / AnkiDroid）开 App **手动同步一次**，`YouTube Mining` 牌组就会出现
 3. 同步是两段式、非实时：每挖一批，两端各同步一次。音档为 mp3，行动端可直接播放
 
@@ -249,7 +249,7 @@ cd /path/to/youtube-anki-mining
 .venv/bin/pip install -U bgutil-ytdlp-pot-provider
 ```
 
-装完后，`run.sh` 的「确认 PO Token Server」步骤会自动侦测 `~/bgutil-ytdlp-pot-provider/server/build`：存在就自动启动（监听 `127.0.0.1:4416`）、已在跑就直接沿用；找不到就只印警告、不中断脚本。
+装完后，`run.sh` 的「确认 PO Token Server」步骤会自动侦测 `~/bgutil-ytdlp-pot-provider/server/build`：存在就自动启动（监听 `127.0.0.1:4416`）、已在跑就直接沿用；找不到就只印一行说明、不中断脚本（没有它多数视频也能下载；下载被 YouTube 挡下时才会提示你安装）。
 
 </details>
 
