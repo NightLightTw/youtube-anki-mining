@@ -23,6 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import history
 from anki import invoke, DECK_NAME, MODEL_NAME
 
 MEDIA_DIR = "media"
@@ -1210,6 +1211,10 @@ def add_card(video_id, video_file, sent, word, title, collocation="", highlight_
         "options": {"allowDuplicate": False},
     }
     note_id = invoke("addNote", note=note)
+    # 記下管線原始輸出，稽核完才知道「人工改了多少」（history.py；失敗只警告）。
+    # 放在 addNote 之後、搬牌組之前：後面的 findCards/changeDeck 若失敗，這張卡也已經建成了。
+    history.record_created(note_id, note, video_id, word, surface, sent, audio_fn,
+                           f"{MEDIA_DIR}/{audio_fn}", flags)
     # 這版 AnkiConnect 的 addNote 會忽略 deckName（卡落在「預設」），用 changeDeck 強制歸位
     card_ids = invoke("findCards", query=f"nid:{note_id}")
     invoke("changeDeck", cards=card_ids, deck=DECK_NAME)

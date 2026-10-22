@@ -12,6 +12,9 @@ YT_Mining_EN.apkg
 # API 金鑰（切勿進版控）
 .env
 
+# 卡片修改歷史（內容是使用者自己的例句與卡片，不進公開 repo）
+history/
+
 # macOS
 .DS_Store
 
